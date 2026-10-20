@@ -102,7 +102,7 @@ def get_all_catalog_plans(network: Optional[str] = None) -> List[Dict[str, Any]]
     return plans
 
 
-def filter_plans_by_attributes(plans: List[Dict[str, Any]], query_text: str) -> List[Dict[str, Any]]:
+def filter_plans_by_attributes(plans: List[Dict[str, Any]], query_text: str, strict: bool = False) -> List[Dict[str, Any]]:
     q = query_text.lower()
     results = list(plans)
 
@@ -113,58 +113,50 @@ def filter_plans_by_attributes(plans: List[Dict[str, Any]], query_text: str) -> 
             p for p in results
             if p["name"].upper().startswith(target_size + " ") or p["key"].upper().startswith(target_size + "_")
         ]
-        if sized:
+        if sized or strict:
             results = sized
+        if not results:
+            return []
 
+    dur = None
     if any(k in q for k in ["30 day", "30days", "30d", "30", "month", "monthly"]):
         dur = [p for p in results if "30 day" in p["name"].lower()]
-        if dur:
-            results = dur
     elif any(k in q for k in ["14 day", "14days", "14d", "2 week", "two week"]):
         dur = [p for p in results if "14 day" in p["name"].lower()]
-        if dur:
-            results = dur
     elif any(k in q for k in ["7 day", "7days", "7d", "week", "weekly"]):
         dur = [p for p in results if "7 day" in p["name"].lower()]
-        if dur:
-            results = dur
     elif any(k in q for k in ["3 day", "3days", "3d"]):
         dur = [p for p in results if "3 day" in p["name"].lower()]
-        if dur:
-            results = dur
     elif any(k in q for k in ["2 day", "2days", "2d"]):
         dur = [p for p in results if "2 day" in p["name"].lower()]
-        if dur:
-            results = dur
     elif any(k in q for k in ["1 day", "1day", "1d", "daily"]):
         dur = [p for p in results if "1 day" in p["name"].lower()]
-        if dur:
-            results = dur
 
+    if dur is not None:
+        if dur or strict:
+            results = dur
+        if not results:
+            return []
+
+    typed = None
     if "awoof" in q:
         typed = [p for p in results if "awoof" in p["name"].lower()]
-        if typed:
-            results = typed
     elif "sme" in q:
         typed = [p for p in results if "sme" in p["name"].lower()]
-        if typed:
-            results = typed
     elif "share" in q:
         typed = [p for p in results if "share" in p["name"].lower()]
-        if typed:
-            results = typed
     elif "social" in q:
         typed = [p for p in results if "social" in p["name"].lower()]
-        if typed:
-            results = typed
     elif "corp" in q or "cg" in q:
         typed = [p for p in results if "corp" in p["name"].lower() or "cg" in p["key"].lower()]
-        if typed:
-            results = typed
     elif "gift" in q:
         typed = [p for p in results if "gift" in p["name"].lower()]
-        if typed:
+
+    if typed is not None:
+        if typed or strict:
             results = typed
+        if not results:
+            return []
 
     price_matches = [p for p in results if str(int(p["retail"])) in q.split()]
     if len(price_matches) == 1:
@@ -797,12 +789,18 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
     # =========================================================================
     # 13. HANDLE FOLLOW-UP REPLIES TO ACTIVE CONTEXT
     # =========================================================================
-    if ctx.get("selected_plan") and recipient_phone:
+    if ctx.get("selected_plan") and recipient_phone and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
         chosen_plan = ctx["selected_plan"]
         net = chosen_plan.get("network") or ctx.get("network") or "MTN"
         return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
 
     candidates: List[Dict[str, Any]] = ctx.get("candidates") or []
+    # If the user switched to a different network (e.g. from AIRTEL budget search to Mom's MTN), drop old candidates!
+    if candidates and network:
+        cand_nets = {c.get("network", "").upper() for c in candidates if c.get("network")}
+        if len(cand_nets) == 1 and network.upper() not in cand_nets:
+            candidates = []
+
     if candidates:
         num_choice_match = re.match(r"^(\d{1,2})\b", lower)
         if num_choice_match and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
@@ -820,7 +818,8 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
                         f"_(Reply with a number, a saved name like `Mom`, or `for me`)_"
                     )
 
-        narrowed = filter_plans_by_attributes(candidates, lower)
+        # Use strict=True so if the user asks for a plan outside the previous list, it falls through to Section 14!
+        narrowed = filter_plans_by_attributes(candidates, lower, strict=True)
         if 0 < len(narrowed) < len(candidates):
             if len(narrowed) == 1:
                 chosen_plan = narrowed[0]
@@ -835,7 +834,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
                     )
             else:
                 return format_disambiguation_list(sender_phone, network, narrowed, recipient_phone, recipient_label)
-
+    
     # =========================================================================
     # 14. FRESH NATURAL LANGUAGE DATA BUYING & CATALOG INQUIRY
     # =========================================================================
