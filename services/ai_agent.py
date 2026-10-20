@@ -1,6 +1,8 @@
 import os
 import re
 import time
+import json
+import requests
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 from sqlalchemy.orm import Session
@@ -227,7 +229,7 @@ def stage_pending_order(
     cashback_preview = round(plan["retail"] * 0.015, 2)
 
     return (
-        f"📋 *Confirm Your Swiftwave Order*\n\n"
+        f"📋 *Confirm Your Swiftwave SmartPay Order*\n\n"
         f"• *Service:* {network.upper()} — {plan['name']}\n"
         f"• *Recipient:* {recip_display}\n"
         f"• *Price:* ₦{plan['retail']:,.0f}\n"
@@ -272,6 +274,51 @@ def format_disambiguation_list(
         f"\n_Reply with the option number (e.g. *1* or *2*) or type the plan name._"
     )
     return "\n".join(lines)
+
+
+def ask_gemini_assistant(user: User, contacts: List[SavedContact], user_message: str) -> Optional[str]:
+    """
+    Uses GEMINI_API_KEY (if set in .env / Render) to answer open-ended conversational
+    questions, Pidgin inquiries, or explanations while strictly grounded in Swiftwave SmartPay facts.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    saved_names = ", ".join([f"{c.display_name} ({c.phone_number})" for c in contacts]) or "None yet"
+
+    system_prompt = f"""
+You are Swiftwave SmartPay, an intelligent, friendly Nigerian WhatsApp VTU & digital services assistant created for Swiftwave Variety Mall (Shop 9 & 10, ABH Plaza, Minna).
+Keep your response concise (under 120 words), warm, WhatsApp-formatted (using *bold* and bullet points), and helpful. Understand both English and Nigerian Pidgin naturally.
+
+KEY FACTS YOU MUST FOLLOW:
+1. Services available right now (Phase 1):
+   - Cheap Data Bundles (MTN, Airtel, Glo).
+   - Sachet Voice Minutes (TalkMore): 8.5 mins (₦110), 21 mins (₦220), 55 mins (₦550), 110 mins (₦1,050). Direct TalkMore bundles DO NOT get deducted even if the user owes MTN XtraTime (borrowed airtime)!
+   - Direct Airtime Top-up.
+   - Instant Exam Result Checker PINs: WAEC (₦3,800), NECO (₦1,350), NABTEB (₦1,200). Saved in user's 'my pins' vault.
+   - 1.5% Instant Cashback on every purchase + ₦100 Direct Referral bonus.
+2. Phase 2 coming soon: Prepaid Electricity Tokens (AEDC, etc.) and Cable TV (DStv/GOtv).
+3. Customer's current Wallet Balance: ₦{user.wallet_balance:,.2f}. Saved Beneficiaries: {saved_names}.
+4. In test/sandbox mode, the user can type 'fund 5000' to add test balance.
+5. Never invent prices outside the catalog. Guide the user on exact phrases they can type (like 'talkmore', 'Send 1GB SME 30 days to Mom', 'What Airtel data can 1500 buy?', or 'cmd').
+"""
+
+    payload = {
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_message}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as e:
+        print(f"ℹ️ Gemini conversational fallback skipped: {e}")
+    return None
 
 
 def process_user_message(db: Session, sender_phone: str, message_text: str) -> str:
@@ -330,7 +377,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
     # =========================================================================
     if lower in {"cmd", "commands", "/cmd", "/help"}:
         return (
-            "📋 *Swiftwave SmartBot Commands*\n\n"
+            "📋 *Swiftwave SmartPay Commands*\n\n"
             "📦 *data* — Browse & buy data bundles\n"
             "🎉 *awoof* / *talkmore* — Sachet Voice Minutes (No XtraTime deduction!)\n"
             "📱 *airtime* — Instant airtime top-up\n"
@@ -399,7 +446,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
         )
         cb_sum = sum(t.amount for t in total_cb)
         return (
-            f"💳 *Your Swiftwave Wallet*\n\n"
+            f"💳 *Your Swiftwave SmartPay Wallet*\n\n"
             f"• *Available Balance:* ₦{user.wallet_balance:,.2f}\n"
             f"• *Total Cashback Earned:* ₦{cb_sum:,.2f} 🎁\n"
             f"• *Dedicated Bank:* {user.bank_name}\n"
@@ -417,7 +464,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
         )
         cb_sum = sum(t.amount for t in total_cb)
         return (
-            f"🎁 *Swiftwave Cashback & Referral Program*\n\n"
+            f"🎁 *Swiftwave SmartPay Cashback & Referral Program*\n\n"
             f"• *Your Referral Code:* `{ref_code}`\n"
             f"• *Purchase Cashback Rate:* 1.5% Instant Cashback on every order!\n"
             f"• *Total Cashback Earned:* ₦{cb_sum:,.2f}\n"
@@ -581,7 +628,6 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
                 plan_dict = {"key": exam_key, **exam_details}
                 return stage_pending_order(db, user, exam_key, plan_dict, target_phone, "Instant WhatsApp PIN Delivery")
 
-        # Show Exam Menu if they just typed "result checker" or "exam pin"
         exam_list = [{"key": k, "network": k, **v} for k, v in EXAM_CATALOG.items()]
         return format_disambiguation_list(
             sender_phone=sender_phone,
@@ -589,12 +635,11 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
             matching_plans=exam_list,
             recipient_phone=normalize_ng_phone(sender_phone) or sender_phone,
             recipient_label="Instant WhatsApp Delivery",
-            header_title="🎓 *Swiftwave Instant Result Checker PINs*"
+            header_title="🎓 *Swiftwave SmartPay Result Checker PINs*"
         )
 
     # =========================================================================
     # 9. SACHET VOICE MINUTES (TALKMORE) & CALL-TIME CALCULATOR
-    #    e.g., "awoof", "talkmore", "I want 30 minutes call to Mom", "owe xtratime"
     # =========================================================================
     mins_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:mins|min|minutes|minute)", lower)
     is_talkmore_intent = (
@@ -603,12 +648,13 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
         or bool(mins_match)
     )
 
-    if is_talkmore_intent and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
+    if is_talkmore_intent and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)) and not any(
+        q_word in lower for q_word in ["how does", "explain", "what is", "wetin be", "why"]
+    ):
         tm_plans = [{"key": k, "network": network or "MTN", **v} for k, v in TALKMORE_CATALOG.items()]
 
         if mins_match:
             requested_mins = float(mins_match.group(1))
-            # Pick the smallest TalkMore bundle that covers the requested minutes (or largest if > 110m)
             suitable = [p for p in tm_plans if p["minutes"] >= requested_mins]
             chosen_tm = suitable[0] if suitable else tm_plans[-1]
 
@@ -630,7 +676,6 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
                     f"Which phone number or saved contact should I send it to? (e.g. `Mom` or `for me`)"
                 )
 
-        # Show TalkMore Menu and store in candidates so user can reply 1, 2, 3, or 4
         set_conv_context(
             sender_phone,
             network=network or "MTN",
@@ -643,9 +688,8 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
 
     # =========================================================================
     # 10. DIRECT AIRTIME TOP-UP
-    #     e.g., "Send 500 airtime to Mom", "Buy 1000 MTN credit for me"
     # =========================================================================
-    if any(k in lower for k in ["airtime", "credit", "recharge card"]) and not any(k in lower for k in ["a2c", "airtime2cash", "sell"]):
+    if any(k in lower for k in ["airtime", "credit", "recharge card"]) and not any(k in lower for k in ["a2c", "airtime2cash", "sell", "owe", "borrowed"]):
         amt_match = re.search(r"(?:₦|naira|n)?\s*(\d{2,5})\b", re.sub(r"\b(?:\+?234|0)[789][01]\d{8}\b", "", lower))
         if amt_match:
             airtime_amt = float(amt_match.group(1))
@@ -712,10 +756,8 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
     # 12. BUDGET DATA SEARCH ("What Airtel data can 1500 buy?", "under 1000", etc.)
     # =========================================================================
     is_balance_budget = any(k in lower for k in ["what can my balance", "can my balance buy", "within my balance", "afford"])
-    
-    # Strip phone numbers so 11-digit numbers aren't mistaken for Naira budgets
     clean_for_budget = re.sub(r"\b(?:\+?234|0)[789][01]\d{8}\b", "", lower)
-    
+
     budget_match = (
         re.search(
             r"(?:under|below|within|with|for|have|get|can|buy|around|budget|worth|up to)\s*(?:of|for|with|buy)?\s*(?:₦|naira|n)?\s*(\d[\d,]*)",
@@ -751,7 +793,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
             recipient_label=recipient_label,
             header_title=f"💰 *{network + ' ' if network else ''}Data Bundles Within ₦{budget_limit:,.0f}*"
         )
-    
+
     # =========================================================================
     # 13. HANDLE FOLLOW-UP REPLIES TO ACTIVE CONTEXT
     # =========================================================================
@@ -838,10 +880,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
     # =========================================================================
     # 15. MAIN GREETING / HOME MENU
     # =========================================================================
-    if any(k in lower for k in ["hi", "hello", "hey", "salam", "menu", "start", "help"]):
+    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening"}:
         clear_conv_context(sender_phone)
         return (
-            f"👋 *Salam & Welcome to Swiftwave SmartBot!* ⚡\n\n"
+            f"👋 *Salam & Welcome to Swiftwave SmartPay!* ⚡\n\n"
             f"Your personal digital-service assistant on WhatsApp. Chat naturally or use quick commands:\n\n"
             f"📶 *Buy Data:* _\"Send 1GB SME 30 days to Mom\"_\n"
             f"📞 *Sachet Voice Minutes (No Debt Deduction!):* Type *talkmore* or _\"20 mins call to Mom\"_\n"
@@ -853,8 +895,15 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
             f"What can I get for you right now?"
         )
 
+    # =========================================================================
+    # 16. GEMINI AI CONVERSATIONAL FALLBACK (FOR OPEN QUESTIONS / PIDGIN CHAT)
+    # =========================================================================
+    ai_reply = ask_gemini_assistant(user, contacts, text)
+    if ai_reply:
+        return ai_reply
+
     return (
-        "🤖 *Swiftwave SmartBot*\n\n"
+        "🤖 *Swiftwave SmartPay*\n\n"
         "Try typing naturally or use a quick command:\n"
         "• *\"Send 1GB SME 30 days to Mom\"*\n"
         "• *\"I want 20 mins call for Mom\"* (TalkMore Sachet)\n"
