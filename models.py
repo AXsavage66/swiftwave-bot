@@ -21,6 +21,9 @@ class User(Base):
 
     orders = relationship("Order", back_populates="user")
     transactions = relationship("Transaction", back_populates="user")
+    contacts = relationship("SavedContact", back_populates="user", cascade="all, delete-orphan")
+    pending_orders = relationship("PendingOrder", back_populates="user", cascade="all, delete-orphan")
+
 
 class Order(Base):
     __tablename__ = "orders"
@@ -39,6 +42,7 @@ class Order(Base):
 
     user = relationship("User", back_populates="orders")
 
+
 class Transaction(Base):
     __tablename__ = "transactions"
 
@@ -51,3 +55,37 @@ class Transaction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     user = relationship("User", back_populates="transactions")
+
+
+class SavedContact(Base):
+    """Stores user beneficiaries like 'Mom', 'Bro Ahmed', etc."""
+    __tablename__ = "saved_contacts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    nickname = Column(String, index=True, nullable=False)  # lowercase key e.g. "mom"
+    display_name = Column(String, nullable=False)          # e.g. "Mom"
+    phone_number = Column(String, nullable=False)          # e.g. "08031234567"
+    network = Column(String, nullable=True)                # e.g. "MTN"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="contacts")
+
+
+class PendingOrder(Base):
+    """Holds a staged order (Ijab) waiting for explicit user confirmation (Qabul)."""
+    __tablename__ = "pending_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    network = Column(String, nullable=False)
+    plan_key = Column(String, nullable=False)
+    plan_id = Column(Integer, nullable=False)
+    plan_name = Column(String, nullable=False)
+    recipient_phone = Column(String, nullable=False)
+    recipient_label = Column(String, nullable=True)
+    cost_price = Column(Float, nullable=False)
+    retail_price = Column(Float, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="pending_orders")
