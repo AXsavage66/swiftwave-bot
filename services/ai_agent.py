@@ -70,13 +70,13 @@ def detect_network_from_phone(phone_11: str) -> Optional[str]:
     return None
 
 
-def get_or_create_user(db: Session, sender_phone: str) -> User:
+def get_or_create_user(db: Session, sender_phone: str, profile_name: str = "Boss") -> User:
     user = db.query(User).filter(User.phone_number == sender_phone).first()
     if not user:
         clean_digits = re.sub(r"\D", "", sender_phone)[-8:].zfill(8)
         user = User(
             phone_number=sender_phone,
-            name="Valued Customer",
+            name=profile_name,
             wallet_balance=0.0,
             bank_name="Monnify / PalmPay (Swiftwave)",
             account_number="90" + clean_digits,
@@ -86,6 +86,10 @@ def get_or_create_user(db: Session, sender_phone: str) -> User:
         db.add(user)
         db.commit()
         db.refresh(user)
+    else:
+        if user.name in ["Valued Customer", "Boss"] and profile_name not in ["Valued Customer", "Boss"]:
+            user.name = profile_name
+            db.commit()
     return user
 
 
@@ -169,7 +173,6 @@ def match_catalog_plan(network: Optional[str], text_query: str) -> List[Dict[str
     all_plans = get_all_catalog_plans(network)
     if not all_plans:
         return []
-    # First try strict matching (where all specified attributes like 1GB + SME + 30 Days must match)
     strict_matches = filter_plans_by_attributes(all_plans, text_query, strict=True)
     if strict_matches:
         return strict_matches
@@ -252,7 +255,7 @@ def stage_pending_order(
 
     return (
         f"{extra_prefix_note}"
-        f"📋 *Confirm Your Swiftwave SmartPay Order*\n\n"
+        f"📋 *Confirm Your Swiftwave Pay Order*\n\n"
         f"• *Service:* {network.upper()} — {plan['name']}\n"
         f"• *Recipient:* {recip_display}\n"
         f"• *Price:* ₦{plan['retail']:,.0f}\n"
@@ -312,7 +315,7 @@ def ask_gemini_assistant(user: User, contacts: List[SavedContact], user_message:
     saved_names = ", ".join([f"{c.display_name} ({c.phone_number})" for c in contacts]) or "None yet"
 
     system_prompt = f"""
-You are Swiftwave SmartPay, an intelligent, friendly Nigerian WhatsApp VTU & digital services assistant created for Swiftwave Variety Mall (Shop 9 & 10, ABH Plaza, Minna).
+You are Swiftwave Pay, an intelligent, friendly Nigerian WhatsApp VTU & digital services assistant created for Swiftwave Variety Mall (Shop 9 & 10, ABH Plaza, Minna).
 Keep your response concise (under 120 words), warm, WhatsApp-formatted (using *bold* and bullet points), and helpful. Understand both English and Nigerian Pidgin naturally.
 
 KEY FACTS YOU MUST FOLLOW:
@@ -344,8 +347,8 @@ KEY FACTS YOU MUST FOLLOW:
     return None
 
 
-def process_user_message(db: Session, sender_phone: str, message_text: str) -> str:
-    user = get_or_create_user(db, sender_phone)
+def process_user_message(db: Session, sender_phone: str, message_text: str, profile_name: str = "Boss") -> str:
+    user = get_or_create_user(db, sender_phone, profile_name)
     text = message_text.strip()
     lower = text.lower()
 
@@ -400,7 +403,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
     # =========================================================================
     if lower in {"cmd", "commands", "/cmd", "/help"}:
         return (
-            "📋 *Swiftwave SmartPay Commands*\n\n"
+            "📋 *Swiftwave Pay Commands*\n\n"
             "📦 *data* — Browse & buy data bundles\n"
             "🎉 *awoof* / *talkmore* — Sachet Voice Minutes (No XtraTime deduction!)\n"
             "📱 *airtime* — Instant airtime top-up\n"
@@ -469,7 +472,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
         )
         cb_sum = sum(t.amount for t in total_cb)
         return (
-            f"💳 *Your Swiftwave SmartPay Wallet*\n\n"
+            f"💳 *Your Swiftwave Pay Wallet*\n\n"
             f"• *Available Balance:* ₦{user.wallet_balance:,.2f}\n"
             f"• *Total Cashback Earned:* ₦{cb_sum:,.2f} 🎁\n"
             f"• *Dedicated Bank:* {user.bank_name}\n"
@@ -487,7 +490,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
         )
         cb_sum = sum(t.amount for t in total_cb)
         return (
-            f"🎁 *Swiftwave SmartPay Cashback & Referral Program*\n\n"
+            f"🎁 *Swiftwave Pay Cashback & Referral Program*\n\n"
             f"• *Your Referral Code:* `{ref_code}`\n"
             f"• *Purchase Cashback Rate:* 1.5% Instant Cashback on every order!\n"
             f"• *Total Cashback Earned:* ₦{cb_sum:,.2f}\n"
@@ -667,7 +670,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
             matching_plans=exam_list,
             recipient_phone=normalize_ng_phone(sender_phone) or sender_phone,
             recipient_label="Instant WhatsApp Delivery",
-            header_title="🎓 *Swiftwave SmartPay Result Checker PINs*"
+            header_title="🎓 *Swiftwave Pay Result Checker PINs*"
         )
 
     # =========================================================================
@@ -971,11 +974,15 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
     # =========================================================================
     if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening"}:
         clear_conv_context(sender_phone)
+       
+        first_name = user.name.split()[0]
+       
         return (
-            f"👋 *Salam & Welcome to Swiftwave SmartPay!* ⚡\n\n"
-            f"Your personal digital-service assistant on WhatsApp. Chat naturally or use quick commands:\n\n"
+            f"👋 *Salam {first_name}, Welcome to Swiftwave Pay!* ⚡\n\n"
+            f"Just tell me what you need! Meanwhile, join our WhatsApp Channel for updates and giveaways:\n"
+            f"👉 https://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12\n\n"
             f"📶 *Buy Data:* _\"Send 1GB SME 30 days to Mom\"_\n"
-            f"📞 *Sachet Voice Minutes (No Debt Deduction!):* Type *talkmore* or _\"20 mins call to Mom\"_\n"
+            f"📞 *Sachet Voice Minutes:* Type *talkmore* or _\"20 mins call to Mom\"_\n"
             f"📱 *Airtime Recharge:* _\"Send 500 airtime to me\"_\n"
             f"🎓 *Exam Result PINs:* Type *waec* or *neco*\n"
             f"🔁 *10-Second Repeat:* Type *repeat*\n"
@@ -992,7 +999,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str) -> s
         return ai_reply
 
     return (
-        "🤖 *Swiftwave SmartPay*\n\n"
+        "🤖 *Swiftwave Pay*\n\n"
         "Try typing naturally or use a quick command:\n"
         "• *\"Send 1GB SME 30 days to Mom\"*\n"
         "• *\"I want 20 mins call for Mom\"* (TalkMore Sachet)\n"
