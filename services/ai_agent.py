@@ -173,9 +173,20 @@ def match_catalog_plan(network: Optional[str], text_query: str) -> List[Dict[str
     all_plans = get_all_catalog_plans(network)
     if not all_plans:
         return []
+        
+    # 1. Exact Interactive Button Title Match (Meta enforces max 24 chars for list items)
+    for p in all_plans:
+        net_prefix = f"[{p['network']}] " if not network else ""
+        expected_title = f"{net_prefix}{p['name']}"[:24].lower()
+        if text_query.lower() == expected_title:
+            return [p]
+            
+    # 2. Strict attribute match
     strict_matches = filter_plans_by_attributes(all_plans, text_query, strict=True)
     if strict_matches:
         return strict_matches
+        
+    # 3. Fuzzy match
     return filter_plans_by_attributes(all_plans, text_query, strict=False)
 
 
@@ -273,8 +284,10 @@ def format_disambiguation_list(
     recipient_phone: Optional[str],
     recipient_label: Optional[str],
     header_title: Optional[str] = None,
-    pending_save_name: Optional[str] = None
-) -> str:
+    pending_save_name: Optional[str] = None,
+    page: int = 0
+) -> Union[str, Dict[str, Any]]:
+    
     set_conv_context(
         sender_phone,
         network=network,
@@ -282,28 +295,58 @@ def format_disambiguation_list(
         recipient_label=recipient_label,
         candidates=matching_plans,
         selected_plan=None,
-        pending_save_name=pending_save_name
+        pending_save_name=pending_save_name,
+        page=page
     )
-    recip_str = f" for *{recipient_label} ({recipient_phone})*" if (recipient_label and recipient_phone) else (
-        f" for *{recipient_phone}*" if recipient_phone else (
-            f" for *{pending_save_name}*" if pending_save_name else ""
-        )
-    )
-    if header_title:
-        title = f"{header_title}{recip_str}:"
+
+    # Calculate Pagination 
+    has_prev = page > 0
+    if len(matching_plans) <= 10:
+        show_plans = matching_plans
+        has_next = False
     else:
-        net_label = f"*{network}*" if network else "available"
-        title = f"⚡ Which {net_label} bundle would you like{recip_str}?"
+        if not has_prev:
+            show_plans = matching_plans[0:9]
+            has_next = len(matching_plans) > 9
+        else:
+            start_idx = 9 + (page - 1) * 8
+            remaining = len(matching_plans) - start_idx
+            if remaining <= 9:
+                show_plans = matching_plans[start_idx : start_idx + remaining]
+                has_next = False
+            else:
+                show_plans = matching_plans[start_idx : start_idx + 8]
+                has_next = True
 
-    lines = [title, ""]
-    for idx, p in enumerate(matching_plans, start=1):
+    rows = []
+    if has_prev:
+        rows.append({"id": "page_prev", "title": "⬅️ Previous", "description": "See previous plans"})
+        
+    for p in show_plans:
         net_prefix = f"[{p['network']}] " if not network else ""
-        lines.append(f"*{idx}.* {net_prefix}{p['name']} — *₦{p['retail']:,.0f}*")
+        title_text = f"{net_prefix}{p['name']}"[:24] # Meta limits Title to 24 chars
+        desc_text = f"₦{p['retail']:,.0f}"
+        rows.append({"id": p["key"], "title": title_text, "description": desc_text})
+        
+    if has_next:
+        rows.append({"id": "page_next", "title": "Next ➡️", "description": "View more plans"})
 
-    lines.append(
-        f"\n_Reply with the option number (e.g. *1* or *2*) or type the plan name._"
-    )
-    return "\n".join(lines)
+    net_label = f" {network}" if network else ""
+    list_header = header_title if header_title else f"⚡{net_label} Plans"
+    list_header = list_header[:60] # Meta limits Header to 60 chars
+
+    return {
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {"type": "text", "text": list_header},
+            "body": {"text": "Select an option from the list below:"},
+            "action": {
+                "button": "View Plans",
+                "sections": [{"title": f"Page {page + 1}", "rows": rows}]
+            }
+        }
+    }
 
 
 def ask_gemini_assistant(user: User, contacts: List[SavedContact], user_message: str) -> Optional[str]:
@@ -328,7 +371,7 @@ KEY FACTS YOU MUST FOLLOW:
 2. Note: Utility bills, TV renewals, and DropBot dispatch are Phase 2 and NOT active yet. Do not offer them.
 3. Customer's current Wallet Balance: ₦{user.wallet_balance:,.2f}. Saved Beneficiaries: {saved_names}.
 4. In test/sandbox mode, the user can type 'fund 5000' to add test balance.
-5. Never invent prices outside the catalog. Guide the user on exact phrases they can type (like 'Talkmore', 'Send 1GB SME to Mom', 'What Airtel data can 1500 buy?', or 'cmd').
+5. Never invent prices outside the catalog. Guide the user on exact phrases they can type, such as: 'Send 2GB MTN to Mom', 'Save 08012345678 as Dad', 'Buy WAEC pin', 'Talkmore for me', or 'cmd'.
 """
 
     payload = {
@@ -353,7 +396,32 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     lower = text.lower()
 
     # =========================================================================
-    # 0. DEEP NESTED CLICK ROUTING (Phase 1 Focused)
+    # 0. HANDLE PAGINATION CLICKS FIRST
+    # =========================================================================
+    if lower in {"next ➡️", "next", "next page"}:
+        ctx = get_conv_context(sender_phone)
+        candidates = ctx.get("candidates", [])
+        if candidates:
+            new_page = ctx.get("page", 0) + 1
+            return format_disambiguation_list(
+                sender_phone, ctx.get("network"), candidates, ctx.get("recipient_phone"),
+                ctx.get("recipient_label"), page=new_page, pending_save_name=ctx.get("pending_save_name")
+            )
+        return "⚠️ No active menu to navigate. Type *menu* to start over."
+
+    if lower in {"⬅️ previous", "previous", "prev"}:
+        ctx = get_conv_context(sender_phone)
+        candidates = ctx.get("candidates", [])
+        if candidates:
+            new_page = max(0, ctx.get("page", 0) - 1)
+            return format_disambiguation_list(
+                sender_phone, ctx.get("network"), candidates, ctx.get("recipient_phone"),
+                ctx.get("recipient_label"), page=new_page, pending_save_name=ctx.get("pending_save_name")
+            )
+        return "⚠️ No active menu to navigate. Type *menu* to start over."
+
+    # =========================================================================
+    # 0B. DEEP NESTED CLICK ROUTING (Phase 1 Focused)
     # =========================================================================
     if lower == "my wallet balance":
         lower = "balance"
@@ -473,7 +541,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             return "🚫 Order cancelled. Your wallet was not charged. How else can I help you today?"
 
     # =========================================================================
-    # 2. COMMANDS LIST ('cmd' / 'help') & SWIFTWAVE MALL (Phase 1 specific)
+    # 2. COMMANDS LIST ('cmd' / 'help') & SWIFTWAVE MALL
     # =========================================================================
     if lower in {"cmd", "commands", "/cmd", "/help"}:
         return (
@@ -489,10 +557,12 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             "🔁 *repeat* — Repeat your last order in 1 tap\n"
             "📜 *history* — See your last 5 transactions\n"
             "🛍️ *mall* — Shop gadgets at Swiftwave Mall\n\n"
-            "💡 *Natural AI Chat:* You can also type:\n"
-            "• _\"Send 1GB SME 30 days to Mom\"_\n"
-            "• _\"Send 500 airtime to 08031234567\"_\n"
-            "• _\"Buy WAEC pin\"_"
+            "💡 *Chat naturally with me! Try typing:*\n"
+            "• _'Send 2GB MTN to Mom'_\n"
+            "• _'Save 08012345678 as Dad'_\n"
+            "• _'Buy WAEC pin'_\n"
+            "• _'Talkmore for me'_\n"
+            "• _'What Airtel data can 1500 buy?'_"
         )
 
     if lower == "mall" or any(k in lower for k in ["variety mall", "swiftwave wear", "ecosystem"]):
@@ -580,7 +650,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         name_clean = " ".join(name_part.split())
 
         if not name_clean:
-            return "⚠️ What name should I save this number under? Example: *Save 08031234567 as Mom*"
+            return "⚠️ What name should I save this number under? Example: *Save 08031234567 as Dad*"
 
         detected_net = None
         for net in ["MTN", "AIRTEL", "GLO", "9MOBILE"]:
@@ -736,7 +806,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             matching_plans=exam_list,
             recipient_phone=normalize_ng_phone(sender_phone) or sender_phone,
             recipient_label="Instant WhatsApp Delivery",
-            header_title="🎓 *Swiftwave Pay Result Checker PINs*"
+            header_title="🎓 Exam PINs"
         )
 
     # =========================================================================
@@ -783,12 +853,12 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     f"Which phone number or saved contact should I send it to?"
                 )
 
-        set_conv_context(
-            sender_phone, network=network or "MTN", recipient_phone=recipient_phone,
-            recipient_label=recipient_label, candidates=tm_plans, selected_plan=None,
-            pending_save_name=unsaved_contact_name
+        # Triggers Interactive List for TalkMore
+        return format_disambiguation_list(
+            sender_phone=sender_phone, network=network or "MTN", matching_plans=tm_plans,
+            recipient_phone=recipient_phone, recipient_label=recipient_label,
+            header_title=f"📞 {network or 'MTN'} TalkMore Plans"
         )
-        return format_talkmore_menu()
 
     # =========================================================================
     # 10. DIRECT AIRTIME TOP-UP
@@ -827,7 +897,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
 
     # =========================================================================
-    # 11. REPEAT LAST ORDER ('repeat' / 'buy again')
+    # 11. REPEAT LAST ORDER
     # =========================================================================
     if any(k in lower for k in ["repeat", "buy again", "last order", "the usual"]):
         last_order = (
@@ -886,9 +956,9 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
 
         target_net = explicit_network or network
         return format_disambiguation_list(
-            sender_phone=sender_phone, network=target_net, matching_plans=affordable[:10],
+            sender_phone=sender_phone, network=target_net, matching_plans=affordable,
             recipient_phone=recipient_phone, recipient_label=recipient_label,
-            header_title=f"💰 *{target_net + ' ' if target_net else ''}Data Bundles Within ₦{budget_limit:,.0f}*"
+            header_title=f"💰 Bundles Within ₦{budget_limit:,.0f}"
         )
 
     # =========================================================================
@@ -923,8 +993,9 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                         f"_(Reply with a number, a saved name like `Mom`, or `for me`)_"
                     )
 
-        narrowed = filter_plans_by_attributes(candidates, lower, strict=True)
-        if 0 < len(narrowed) < len(candidates):
+        # Meta Button Fallback logic
+        narrowed = match_catalog_plan(network, lower)
+        if narrowed:
             if len(narrowed) == 1:
                 chosen_plan = narrowed[0]
                 net = chosen_plan.get("network") or network or "MTN"
@@ -940,7 +1011,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 return format_disambiguation_list(sender_phone, network, narrowed, recipient_phone, recipient_label)
 
     # =========================================================================
-    # 14. THE FIX: RAW NETWORK NAMES & NATURAL LANGUAGE DATA BUYING
+    # 14. RAW NETWORK NAMES & NATURAL LANGUAGE DATA BUYING
     # =========================================================================
     has_data_size = bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower))
     has_plan_keyword = any(k in lower for k in ["sme", "awoof", "gifting", "share", "social", "corp"])
@@ -948,7 +1019,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     if has_data_size or has_plan_keyword:
         matching_plans = match_catalog_plan(network, lower)
         if not matching_plans and network:
-            return f"⚠️ I couldn't find that exact bundle on *{network}*.\n\n{format_menu_text(network)}"
+            return f"⚠️ I couldn't find that exact bundle on *{network}*."
 
         if len(matching_plans) == 1:
             chosen_plan = matching_plans[0]
@@ -978,20 +1049,15 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 pending_save_name=unsaved_contact_name
             )
 
-    # THIS STOPS THE BUG YOU CAUGHT: It forces naked network names to open the catalog instead of Gemini
     is_catalog_request = any(k in lower for k in ["data", "plan", "bundle", "price", "buy", "how much", "list", "show"])
-    is_raw_network_click = lower in {"mtn", "airtel", "glo", "9mobile", "mtn data", "airtel data", "glo data", "9mobile data"}
+    is_raw_network_click = lower in {"mtn", "airtel", "glo", "9mobile", "mtn data", "airtel data", "glo data", "9mobile data", "net_mtn", "net_airtel", "net_glo", "net_9mobile"}
     
     if network and (is_catalog_request or is_raw_network_click):
         all_net_plans = get_all_catalog_plans(network)
-        set_conv_context(
-            sender_phone, network=network, recipient_phone=recipient_phone,
-            recipient_label=recipient_label, candidates=all_net_plans, selected_plan=None
-        )
-        return (
-            f"{format_menu_text(network)}\n\n"
-            f"💬 _Reply with an option number (e.g. *1*), or chat naturally like:_\n"
-            f"*'Send 2GB 30 days to Mom'*"
+        return format_disambiguation_list(
+            sender_phone=sender_phone, network=network, matching_plans=all_net_plans,
+            recipient_phone=recipient_phone, recipient_label=recipient_label,
+            header_title=f"⚡ {network} Data Plans"
         )
 
     # =========================================================================
@@ -1056,9 +1122,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
 
     return (
         "🤖 *Swiftwave Pay*\n\n"
-        "Try typing naturally or use a quick command:\n"
-        "• *\"Send 1GB SME 30 days to Mom\"*\n"
-        "• *\"I want 20 mins call for Mom\"*\n"
-        "• *\"Buy WAEC pin\"*\n"
-        "• Type *cmd* to see all commands!"
+        "💡 *Chat naturally with me! Try typing:*\n"
+        "• _'Send 2GB MTN to Mom'_\n"
+        "• _'Save 08012345678 as Dad'_\n"
+        "• _'Buy WAEC pin'_\n"
+        "• _'Talkmore for me'_\n"
+        "• _'What Airtel data can 1500 buy?'_"
     )
