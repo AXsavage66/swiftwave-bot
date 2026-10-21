@@ -174,19 +174,16 @@ def match_catalog_plan(network: Optional[str], text_query: str) -> List[Dict[str
     if not all_plans:
         return []
         
-    # 1. Exact Interactive Button Title Match (Meta enforces max 24 chars for list items)
     for p in all_plans:
         net_prefix = f"[{p['network']}] " if not network else ""
         expected_title = f"{net_prefix}{p['name']}"[:24].lower()
         if text_query.lower() == expected_title:
             return [p]
             
-    # 2. Strict attribute match
     strict_matches = filter_plans_by_attributes(all_plans, text_query, strict=True)
     if strict_matches:
         return strict_matches
         
-    # 3. Fuzzy match
     return filter_plans_by_attributes(all_plans, text_query, strict=False)
 
 
@@ -250,30 +247,22 @@ def stage_pending_order(
         and network.upper() in ("MTN", "AIRTEL", "GLO", "9MOBILE")
         and detected_prefix_net != network.upper()
     ):
-        prefix_warning = (
-            f"\n⚠️ *Network Prefix Warning:* `{recipient_phone}` is a *{detected_prefix_net}* prefix, "
-            f"but you selected *{network.upper()}*! Only confirm if ported.\n"
-        )
+        prefix_warning = f"\n⚠️ *Note:* `{recipient_phone}` is a *{detected_prefix_net}* number.\n"
 
     balance_warning = ""
     if user.wallet_balance < plan["retail"]:
-        balance_warning = (
-            f"\n⚠️ *Low Balance:* Your wallet (*₦{user.wallet_balance:,.2f}*) is lower than ₦{plan['retail']:,.0f}. "
-            f"Reply *'fund 5000'* to top up first.\n"
-        )
+        balance_warning = f"\n⚠️ Wallet too low. Reply *fund 5000* to top up.\n"
 
     cashback_preview = round(plan["retail"] * 0.015, 2)
 
     return (
         f"{extra_prefix_note}"
-        f"📋 *Confirm Your Swiftwave Pay Order*\n\n"
-        f"• *Service:* {network.upper()} — {plan['name']}\n"
-        f"• *Recipient:* {recip_display}\n"
-        f"• *Price:* ₦{plan['retail']:,.0f}\n"
-        f"• *Instant Cashback:* +₦{cashback_preview:,.2f} 🎁\n"
-        f"• *Your Wallet:* ₦{user.wallet_balance:,.2f}\n"
+        f"🛒 *Confirm Order*\n"
+        f"📱 {network.upper()} {plan['name']} ➔ {recip_display}\n"
+        f"💰 ₦{plan['retail']:,.0f} (Cashback: +₦{cashback_preview:,.2f})\n"
+        f"💳 Wallet: ₦{user.wallet_balance:,.2f}\n"
         f"{prefix_warning}{balance_warning}\n"
-        f"✅ Reply *YES* or *CONFIRM* to complete now, or *CANCEL* to abort."
+        f"✅ Reply *YES* or *CANCEL*"
     )
 
 
@@ -299,7 +288,6 @@ def format_disambiguation_list(
         page=page
     )
 
-    # Calculate Pagination 
     has_prev = page > 0
     if len(matching_plans) <= 10:
         show_plans = matching_plans
@@ -324,7 +312,7 @@ def format_disambiguation_list(
         
     for p in show_plans:
         net_prefix = f"[{p['network']}] " if not network else ""
-        title_text = f"{net_prefix}{p['name']}"[:24] # Meta limits Title to 24 chars
+        title_text = f"{net_prefix}{p['name']}"[:24]
         desc_text = f"₦{p['retail']:,.0f}"
         rows.append({"id": p["key"], "title": title_text, "description": desc_text})
         
@@ -333,14 +321,14 @@ def format_disambiguation_list(
 
     net_label = f" {network}" if network else ""
     list_header = header_title if header_title else f"⚡{net_label} Plans"
-    list_header = list_header[:60] # Meta limits Header to 60 chars
+    list_header = list_header[:60]
 
     return {
         "type": "interactive",
         "interactive": {
             "type": "list",
             "header": {"type": "text", "text": list_header},
-            "body": {"text": "Select an option from the list below:"},
+            "body": {"text": "Select an option below:"},
             "action": {
                 "button": "View Plans",
                 "sections": [{"title": f"Page {page + 1}", "rows": rows}]
@@ -358,26 +346,17 @@ def ask_gemini_assistant(user: User, contacts: List[SavedContact], user_message:
     saved_names = ", ".join([f"{c.display_name} ({c.phone_number})" for c in contacts]) or "None yet"
 
     system_prompt = f"""
-You are Swiftwave Pay, an intelligent, friendly Nigerian WhatsApp VTU & digital services assistant created for Swiftwave Variety Mall (Shop 9 & 10, ABH Plaza, Minna).
-Keep your response concise (under 120 words), warm, WhatsApp-formatted (using *bold* and bullet points), and helpful. Understand both English and Nigerian Pidgin naturally.
-
-KEY FACTS YOU MUST FOLLOW:
-1. Services available right now (Phase 1):
-   - Cheap Data Bundles (MTN, Airtel, Glo).
-   - Sachet Voice Minutes (TalkMore): Bypasses borrowed airtime deductions.
-   - Direct Airtime Top-up.
-   - Instant Exam Result Checker PINs: WAEC (₦3,800), NECO (₦1,350), NABTEB (₦1,200). Saved in user's 'my pins' vault.
-   - 1.5% Instant Cashback on every purchase + ₦100 Direct Referral bonus.
-2. Note: Utility bills and Cable TV renewals are Phase 2 and NOT active yet. Do not offer them.
-3. Customer's current Wallet Balance: ₦{user.wallet_balance:,.2f}. Saved Beneficiaries: {saved_names}.
-4. In test/sandbox mode, the user can type 'fund 5000' to add test balance.
-5. Never invent prices outside the catalog. Guide the user on exact phrases they can type, such as: 'Send 2GB MTN to Mom', 'Save 08012345678 as Dad', 'Buy WAEC pin', 'Talkmore for me', or 'cmd'.
+You are Swiftwave Pay. Be extremely minimal and direct. NO LONG PARAGRAPHS. Keep responses under 30 words.
+1. Phase 1 Services: Cheap Data, TalkMore Voice Minutes, Airtime, WAEC/NECO PINs.
+2. Utility bills and Cable TV are Phase 2. Do not offer them.
+3. Wallet: ₦{user.wallet_balance:,.2f}. Contacts: {saved_names}.
+4. Guide users briefly if they need help (e.g. 'Type cmd' or 'Send 2GB MTN to Mom').
 """
 
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
         "contents": [{"role": "user", "parts": [{"text": user_message}]}],
-        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300}
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 100}
     }
 
     try:
@@ -407,7 +386,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 sender_phone, ctx.get("network"), candidates, ctx.get("recipient_phone"),
                 ctx.get("recipient_label"), page=new_page, pending_save_name=ctx.get("pending_save_name")
             )
-        return "⚠️ No active menu to navigate. Type *menu* to start over."
+        return "⚠️ No active menu. Type *menu*."
 
     if lower in {"⬅️ previous", "previous", "prev"}:
         ctx = get_conv_context(sender_phone)
@@ -418,7 +397,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 sender_phone, ctx.get("network"), candidates, ctx.get("recipient_phone"),
                 ctx.get("recipient_label"), page=new_page, pending_save_name=ctx.get("pending_save_name")
             )
-        return "⚠️ No active menu to navigate. Type *menu* to start over."
+        return "⚠️ No active menu. Type *menu*."
 
     # =========================================================================
     # 0B. DEEP NESTED CLICK ROUTING (Phase 1 Focused)
@@ -434,65 +413,62 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     elif lower == "swiftwave mall":
         lower = "mall"
         
-    # --- Deep Click: Data Networks ---
     if lower in {"buy data", "data"}:
         return {
             "type": "interactive",
             "interactive": {
                 "type": "list",
                 "header": {"type": "text", "text": "🌐 Select Network"},
-                "body": {"text": "Which network do you want data for?"},
+                "body": {"text": "Choose your network:"},
                 "action": {
-                    "button": "Choose Network",
+                    "button": "Networks",
                     "sections": [{
                         "title": "Networks",
                         "rows": [
-                            {"id": "net_mtn", "title": "MTN Data", "description": "View MTN Data Plans"},
-                            {"id": "net_airtel", "title": "Airtel Data", "description": "View Airtel Data Plans"},
-                            {"id": "net_glo", "title": "GLO Data", "description": "View GLO Data Plans"},
-                            {"id": "net_9mobile", "title": "9Mobile Data", "description": "View 9Mobile Data Plans"}
+                            {"id": "net_mtn", "title": "MTN Data"},
+                            {"id": "net_airtel", "title": "Airtel Data"},
+                            {"id": "net_glo", "title": "GLO Data"},
+                            {"id": "net_9mobile", "title": "9Mobile Data"}
                         ]
                     }]
                 }
             }
         }
 
-    # --- Deep Click: TalkMore Networks ---
     if lower in {"talkmore voice", "talkmore"}:
         return {
             "type": "interactive",
             "interactive": {
                 "type": "button",
-                "body": {"text": "📞 Select a network for TalkMore Voice:"},
+                "body": {"text": "📞 Select TalkMore network:"},
                 "action": {
                     "buttons": [
-                        {"type": "reply", "reply": {"id": "tm_mtn", "title": "MTN TalkMore"}},
-                        {"type": "reply", "reply": {"id": "tm_airtel", "title": "Airtel TalkMore"}},
-                        {"type": "reply", "reply": {"id": "tm_glo", "title": "GLO TalkMore"}}
+                        {"type": "reply", "reply": {"id": "tm_mtn", "title": "MTN"}},
+                        {"type": "reply", "reply": {"id": "tm_airtel", "title": "Airtel"}},
+                        {"type": "reply", "reply": {"id": "tm_glo", "title": "GLO"}}
                     ]
                 }
             }
         }
 
-    # --- Deep Click: Exam PINs ---
     if lower == "exam pin":
         return {
             "type": "interactive",
             "interactive": {
                 "type": "button",
-                "body": {"text": "🎓 Which Exam Result PIN do you need?"},
+                "body": {"text": "🎓 Select Exam:"},
                 "action": {
                     "buttons": [
-                        {"type": "reply", "reply": {"id": "waec_pin", "title": "WAEC PIN"}},
-                        {"type": "reply", "reply": {"id": "neco_pin", "title": "NECO PIN"}},
-                        {"type": "reply", "reply": {"id": "nabteb_pin", "title": "NABTEB PIN"}}
+                        {"type": "reply", "reply": {"id": "waec_pin", "title": "WAEC"}},
+                        {"type": "reply", "reply": {"id": "neco_pin", "title": "NECO"}},
+                        {"type": "reply", "reply": {"id": "nabteb_pin", "title": "NABTEB"}}
                     ]
                 }
             }
         }
 
     if lower in {"airtime recharge", "airtime"}:
-        return "📱 *Airtime Top-Up*\n\nHow much airtime do you need, and for which number?\n\n👉 _Example: \"Send 500 MTN to Mom\" or \"Buy 1000 airtime for me\"_"
+        return "📱 *Airtime*\nHow much and for which number?\n_Example: Send 500 to Mom_"
 
     # =========================================================================
     # 1. CHECK FOR PENDING ORDER CONFIRMATION
@@ -538,37 +514,30 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             db.delete(pending)
             db.commit()
             clear_conv_context(sender_phone)
-            return "🚫 Order cancelled. Your wallet was not charged. How else can I help you today?"
+            return "🚫 Cancelled."
 
     # =========================================================================
     # 2. COMMANDS LIST ('cmd' / 'help') & SWIFTWAVE MALL
     # =========================================================================
     if lower in {"cmd", "commands", "/cmd", "/help"}:
         return (
-            "📋 *Swiftwave Pay Commands*\n\n"
-            "📦 *data* — Browse & buy data bundles\n"
-            "🎉 *awoof* / *talkmore* — Sachet Voice Minutes\n"
-            "📱 *airtime* — Instant airtime top-up\n"
-            "🎓 *waec* / *neco* — Buy Exam Result Checker PINs\n"
-            "🔒 *my pins* — View your purchased PINs\n"
-            "💰 *bal* / *balance* — Check wallet & funding account\n"
-            "🔗 *ref* / *referral* — Your referral link & rewards\n"
-            "📱 *my beneficiaries* — View saved numbers\n"
-            "🔁 *repeat* — Repeat your last order in 1 tap\n"
-            "📜 *history* — See your last 5 transactions\n"
-            "🛍️ *mall* — Shop gadgets at Swiftwave Mall\n\n"
-            "💡 *Chat naturally with me! Try typing:*\n"
+            "📋 *Commands*\n"
+            "📦 *data* — Buy data\n"
+            "🎉 *talkmore* — Voice Minutes\n"
+            "📱 *airtime* — Buy airtime\n"
+            "🎓 *waec* / *neco* — Exam PINs\n"
+            "💰 *bal* — Check wallet\n"
+            "🔁 *repeat* — Repeat last order\n"
+            "🛍️ *mall* — Shop online\n\n"
+            "💡 *Try typing:*\n"
             "• _'Send 2GB MTN to Mom'_\n"
-            "• _'Save 08012345678 as Dad'_\n"
-            "• _'Buy WAEC pin'_\n"
-            "• _'Talkmore for me'_\n"
-            "• _'What Airtel data can 1500 buy?'_"
+            "• _'Save 08012345678 as Dad'_"
         )
 
     if lower == "mall" or any(k in lower for k in ["variety mall", "swiftwave wear", "ecosystem"]):
         return (
-            "🛍️ *Swiftwave Variety Mall (Shop 9 & 10, ABH Plaza, Minna)*\n\n"
-            "Shop gadgets, phone accessories, ring lights & daily essentials online:\n"
+            "🛍️ *Swiftwave Variety Mall*\n"
+            "Shop gadgets & accessories:\n"
             "👉 https://swiftwave-variety-mall.vercel.app"
         )
 
@@ -589,12 +558,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             )
             db.add(txn)
             db.commit()
-            return (
-                f"💰 *Wallet Funded Successfully!*\n\n"
-                f"• *Added:* ₦{amount:,.2f}\n"
-                f"• *New Balance:* ₦{user.wallet_balance:,.2f}\n\n"
-                f"What would you like to buy today?"
-            )
+            return f"💰 *Wallet Funded!*\n➕ Added: ₦{amount:,.2f}\n💳 Balance: ₦{user.wallet_balance:,.2f}\n\nWhat would you like to buy?"
 
     # =========================================================================
     # 4. WALLET BALANCE & REFERRAL / CASHBACK REWARDS
@@ -603,37 +567,18 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         any(k in lower for k in ["balance", "wallet", "my account", "account number"])
         and not any(k in lower for k in ["buy", "send", "gb", "mb", "what can", "can my"])
     ):
-        total_cb = (
-            db.query(Transaction)
-            .filter(Transaction.user_id == user.id, Transaction.reference.like("SW-CB-%"))
-            .all()
-        )
-        cb_sum = sum(t.amount for t in total_cb)
         return (
-            f"💳 *Your Swiftwave Pay Wallet*\n\n"
-            f"• *Available Balance:* ₦{user.wallet_balance:,.2f}\n"
-            f"• *Total Cashback Earned:* ₦{cb_sum:,.2f} 🎁\n"
-            f"• *Dedicated Bank:* {user.bank_name}\n"
-            f"• *Account Number:* `{user.account_number}`\n"
-            f"• *Account Name:* {user.account_name}\n\n"
-            f"💡 _Transfer to your dedicated account above for instant automated funding._"
+            f"💳 *Your Wallet*\n"
+            f"Balance: ₦{user.wallet_balance:,.2f}\n\n"
+            f"🏦 *Funding Account:*\n"
+            f"Bank: {user.bank_name}\n"
+            f"Acc: `{user.account_number}`\n"
+            f"Name: {user.account_name}"
         )
 
     if lower in {"ref", "referral", "ref bal"} or "referral" in lower:
         ref_code = user.tracking_reference or f"SW-{user.phone_number[-6:]}"
-        total_cb = (
-            db.query(Transaction)
-            .filter(Transaction.user_id == user.id, Transaction.reference.like("SW-CB-%"))
-            .all()
-        )
-        cb_sum = sum(t.amount for t in total_cb)
-        return (
-            f"🎁 *Swiftwave Pay Cashback & Referral Program*\n\n"
-            f"• *Your Referral Code:* `{ref_code}`\n"
-            f"• *Purchase Cashback Rate:* 1.5% Instant Cashback on every order!\n"
-            f"• *Total Cashback Earned:* ₦{cb_sum:,.2f}\n"
-            f"• *Direct Referral Bonus:* Earn *₦100* when a friend joins with your code `{ref_code}`!"
-        )
+        return f"🎁 *Cashback & Referrals*\nYour Code: `{ref_code}`\nEarn 1.5% cashback on orders + ₦100 per referral!"
 
     # =========================================================================
     # 5. SAVE & VIEW CONTACTS / BENEFICIARIES
@@ -642,14 +587,14 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         raw_num = re.search(r"\d{10,13}", lower).group(0)
         norm_phone = normalize_ng_phone(raw_num)
         if not norm_phone:
-            return "⚠️ Please provide a valid 11-digit Nigerian phone number (e.g., `Save 08031234567 as Mom`)."
+            return "⚠️ Invalid number. Example: `Save 08031234567 as Mom`."
 
         name_part = re.sub(r"\b(save|contact|number|phone|as|for|to|mtn|airtel|glo|9mobile)\b", " ", text, flags=re.IGNORECASE)
         name_part = name_part.replace(raw_num, " ").strip(" -:,.()")
         name_clean = " ".join(name_part.split())
 
         if not name_clean:
-            return "⚠️ What name should I save this number under? Example: *Save 08031234567 as Dad*"
+            return "⚠️ Name missing. Example: *Save 08031234567 as Mom*"
 
         detected_net = None
         for net in ["MTN", "AIRTEL", "GLO", "9MOBILE"]:
@@ -658,25 +603,19 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 break
 
         saved = save_user_contact(db, user, name_clean, norm_phone, detected_net)
-        return (
-            f"✅ *Beneficiary Saved!*\n\n"
-            f"• *Name:* {saved.display_name}\n"
-            f"• *Number:* {saved.phone_number}\n"
-            f"• *Network:* {saved.network}\n\n"
-            f"Next time, just say: _'Send 1GB to {saved.display_name}'_!"
-        )
+        return f"✅ *Saved {saved.display_name}* ({saved.phone_number})\nNext time, type: _Send 1GB to {saved.display_name}_"
 
     contacts = db.query(SavedContact).filter(SavedContact.user_id == user.id).all()
     if any(k in lower for k in ["my contacts", "saved contacts", "beneficiaries", "my beneficiaries", "contact list", "show contacts"]):
         if not contacts:
-            return "📒 You have no saved beneficiaries yet. Reply: *Save 08031234567 as Mom*"
-        lines = ["📒 *Your Saved Beneficiaries:*", ""]
+            return "📒 No saved numbers. Reply: *Save 08031234567 as Mom*"
+        lines = ["📒 *Saved Numbers:*"]
         for c in contacts:
-            lines.append(f"• *{c.display_name}:* {c.phone_number} ({c.network})")
+            lines.append(f"• {c.display_name}: {c.phone_number}")
         return "\n".join(lines)
 
     # =========================================================================
-    # 6. EXAM PIN VAULT ('my pins') & TRANSACTION HISTORY ('history')
+    # 6. EXAM PIN VAULT & HISTORY
     # =========================================================================
     if any(k in lower for k in ["my pins", "my pin", "saved pins", "exam pins", "checker pin"]):
         pin_orders = (
@@ -687,10 +626,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             .all()
         )
         if not pin_orders:
-            return "🎓 You haven't purchased any Exam PINs yet. Reply *'Buy WAEC pin'*!"
-        lines = ["🔒 *Your Exam Result Checker PIN Vault:*", ""]
+            return "🎓 No PINs purchased yet."
+        lines = ["🔒 *Your Exam PINs:*"]
         for o in pin_orders:
-            lines.append(f"• *{o.network}:* `{o.external_ref}` _(₦{o.selling_price:,.0f})_")
+            lines.append(f"• {o.network}: `{o.external_ref}`")
         return "\n".join(lines)
 
     if any(k in lower for k in ["history", "my orders", "recent orders", "transactions", "last receipt"]):
@@ -702,18 +641,13 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             .all()
         )
         if not recent_orders:
-            return "🧾 You haven't completed any orders yet. Type *cmd* to see everything I can do!"
+            return "🧾 No recent orders. Type *cmd* to start."
 
-        lines = ["🧾 *Your Last 5 Orders:*", ""]
+        lines = ["🧾 *Last 5 Orders:*"]
         for o in recent_orders:
             plan_info = get_plan_by_id(int(o.plan_id)) if o.plan_id.isdigit() else None
             p_name = plan_info["name"] if plan_info else (f"Airtime ₦{o.selling_price:,.0f}" if o.plan_id == "999" else f"Plan #{o.plan_id}")
-            date_str = o.created_at.strftime("%b %d, %H:%M")
-            lines.append(
-                f"• *{o.network} — {p_name}* → `{o.recipient_phone}`\n"
-                f"  ₦{o.selling_price:,.0f} | {o.status} | _{date_str}_"
-            )
-        lines.append("\n💡 _Reply *'repeat'* anytime to re-order your most recent bundle!_")
+            lines.append(f"• {o.network} {p_name} ➔ {o.recipient_phone} ({o.status})")
         return "\n".join(lines)
 
     # =========================================================================
@@ -742,15 +676,12 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
         if recip_name_match:
             cand_name = recip_name_match.group(1).strip()
-            reserved_words = {
-                "me", "myself", "mtn", "airtel", "glo", "9mobile", "data",
-                "airtime", "day", "days", "week", "month", "buy", "now"
-            }
+            reserved_words = {"me", "myself", "mtn", "airtel", "glo", "9mobile", "data", "airtime", "buy", "now"}
             if cand_name.lower() not in reserved_words and not re.search(r"\d", cand_name):
                 unsaved_contact_name = cand_name.title()
 
     is_fresh_order_cmd = bool(
-        re.match(r"^(?:send|buy|give|i want|abeg send|abeg buy)\b", lower)
+        re.match(r"^(?:send|buy|give|i want)\b", lower)
         or unsaved_contact_name
         or matched_contact
         or phone_match
@@ -796,31 +727,26 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             if exam_key.lower() in lower:
                 target_phone = recipient_phone or (normalize_ng_phone(sender_phone) or sender_phone)
                 plan_dict = {"key": exam_key, **exam_details}
-                return stage_pending_order(db, user, exam_key, plan_dict, target_phone, "Instant WhatsApp PIN Delivery")
+                return stage_pending_order(db, user, exam_key, plan_dict, target_phone, "WhatsApp PIN Delivery")
 
         exam_list = [{"key": k, "network": k, **v} for k, v in EXAM_CATALOG.items()]
         return format_disambiguation_list(
-            sender_phone=sender_phone,
-            network=None,
-            matching_plans=exam_list,
+            sender_phone=sender_phone, network=None, matching_plans=exam_list,
             recipient_phone=normalize_ng_phone(sender_phone) or sender_phone,
-            recipient_label="Instant WhatsApp Delivery",
-            header_title="🎓 Exam PINs"
+            recipient_label="WhatsApp Delivery", header_title="🎓 Exam PINs"
         )
 
     # =========================================================================
-    # 9. SACHET VOICE MINUTES (TALKMORE) & CALL-TIME CALCULATOR
+    # 9. SACHET VOICE MINUTES (TALKMORE)
     # =========================================================================
     mins_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:mins|min|minutes|minute)", lower)
     is_talkmore_intent = (
         lower in {"awoof", "talkmore", "minutes", "sachet", "mtn talkmore", "airtel talkmore", "glo talkmore"}
-        or any(k in lower for k in ["talkmore", "voice bundle", "call bundle", "xtratime", "owe airtime"])
+        or any(k in lower for k in ["talkmore", "voice bundle", "call bundle"])
         or bool(mins_match)
     )
 
-    if is_talkmore_intent and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)) and not any(
-        q_word in lower for q_word in ["how does", "explain", "what is", "wetin be", "why"]
-    ):
+    if is_talkmore_intent and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
         tm_plans = [{"key": k, "network": network or "MTN", **v} for k, v in TALKMORE_CATALOG.items()]
 
         if mins_match:
@@ -838,38 +764,28 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     sender_phone, network=network or "MTN", selected_plan=chosen_tm,
                     candidates=None, pending_save_name=unsaved_contact_name
                 )
-                return (
-                    f"📞 *Call-Time Calculator:* *{chosen_tm['name']}* (*₦{chosen_tm['retail']:,.0f}*).\n\n"
-                    f"📒 You haven't saved *{unsaved_contact_name}'s* number yet!\n"
-                    f"Reply with *{unsaved_contact_name}'s 11-digit phone number* to stage this order!"
-                )
+                return f"⚡ {chosen_tm['name']}\nReply with *{unsaved_contact_name}'s 11-digit phone number*."
             else:
                 set_conv_context(sender_phone, network=network or "MTN", selected_plan=chosen_tm, candidates=None)
-                return (
-                    f"📞 *Call-Time Calculator:* For *{requested_mins:g} mins* of talk time, your best Sachet Voice Bundle is:\n"
-                    f"👉 *{chosen_tm['name']}* — *₦{chosen_tm['retail']:,.0f}*\n"
-                    f"_(Bypasses borrowed XtraTime deductions!)_\n\n"
-                    f"Which phone number or saved contact should I send it to?"
-                )
+                return f"⚡ {chosen_tm['name']}\nWhich phone number should I send it to?"
 
-        # Triggers Interactive List for TalkMore
         return format_disambiguation_list(
             sender_phone=sender_phone, network=network or "MTN", matching_plans=tm_plans,
             recipient_phone=recipient_phone, recipient_label=recipient_label,
-            header_title=f"📞 {network or 'MTN'} TalkMore Plans"
+            header_title=f"📞 {network or 'MTN'} TalkMore"
         )
 
     # =========================================================================
     # 10. DIRECT AIRTIME TOP-UP
     # =========================================================================
-    if any(k in lower for k in ["airtime", "credit", "recharge card"]) and not any(k in lower for k in ["a2c", "airtime2cash", "sell"]):
+    if any(k in lower for k in ["airtime", "credit", "recharge card"]):
         amt_match = re.search(r"(?:₦|naira|n)?\s*(\d{2,5})\b", re.sub(r"\b(?:\+?234|0)[789][01]\d{8}\b", "", lower))
         if amt_match:
             airtime_amt = float(amt_match.group(1))
             if 50 <= airtime_amt <= 50000:
                 airtime_plan = {
                     "key": f"AIRTIME_{int(airtime_amt)}", "network": network or "MTN", "plan_id": 999,
-                    "name": f"₦{airtime_amt:,.0f} Direct Airtime Top-Up", "cost": round(airtime_amt * 0.97, 2), "retail": airtime_amt
+                    "name": f"₦{airtime_amt:,.0f} Airtime", "cost": round(airtime_amt * 0.97, 2), "retail": airtime_amt
                 }
                 if recipient_phone:
                     return stage_pending_order(db, user, network or "MTN", airtime_plan, recipient_phone, recipient_label)
@@ -878,27 +794,16 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                         sender_phone, network=network or "MTN", selected_plan=airtime_plan,
                         candidates=None, pending_save_name=unsaved_contact_name
                     )
-                    return (
-                        f"📱 Ready to send *₦{airtime_amt:,.0f} Airtime* to *{unsaved_contact_name}*.\n\n"
-                        f"📒 Reply with *{unsaved_contact_name}'s 11-digit phone number* to prepare your order!"
-                    )
+                    return f"📱 Ready to send ₦{airtime_amt:,.0f} Airtime.\nReply with *{unsaved_contact_name}'s 11-digit number*."
                 else:
                     set_conv_context(sender_phone, network=network or "MTN", selected_plan=airtime_plan, candidates=None)
-                    return (
-                        f"📱 Ready to send *₦{airtime_amt:,.0f} {network or ''} Airtime*.\n"
-                        f"Which phone number or saved contact should I recharge?"
-                    )
-        return (
-            "📱 *Instant Airtime Recharge*\n\n"
-            "Just tell me the amount and recipient! Examples:\n"
-            "• _\"Send 500 airtime to Mom\"_\n"
-            "• _\"Buy 1000 MTN airtime for me\"_"
-        )
+                    return f"📱 Ready to send ₦{airtime_amt:,.0f} Airtime.\nWhich phone number should I recharge?"
+        return "📱 *Airtime*\nHow much and to which number?\n_Example: Send 500 to Mom_"
 
     # =========================================================================
     # 11. REPEAT LAST ORDER
     # =========================================================================
-    if any(k in lower for k in ["repeat", "buy again", "last order", "the usual"]):
+    if any(k in lower for k in ["repeat", "buy again", "last order"]):
         last_order = (
             db.query(Order)
             .filter(Order.user_id == user.id, Order.status == "SUCCESS")
@@ -906,11 +811,11 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             .first()
         )
         if not last_order:
-            return "⚠️ You don't have a previous successful order to repeat yet."
+            return "⚠️ No previous successful order found."
 
         plan_info = get_plan_by_id(int(last_order.plan_id)) if last_order.plan_id.isdigit() else None
         if not plan_info:
-            return "⚠️ Your previous bundle is no longer in the catalog."
+            return "⚠️ Plan no longer available."
 
         target_phone = recipient_phone if (phone_match or matched_contact or is_self_recharge) else last_order.recipient_phone
         target_label = recipient_label if (matched_contact or is_self_recharge) else None
@@ -927,14 +832,14 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         return stage_pending_order(db, user, plan_info["network"], plan_dict, target_phone, target_label)
 
     # =========================================================================
-    # 12. BUDGET DATA SEARCH ("What Airtel data can 1500 buy?")
+    # 12. BUDGET DATA SEARCH
     # =========================================================================
-    is_balance_budget = any(k in lower for k in ["what can my balance", "can my balance buy", "within my balance"])
+    is_balance_budget = any(k in lower for k in ["what can my balance", "can my balance buy"])
     clean_for_budget = re.sub(r"\b(?:\+?234|0)[789][01]\d{8}\b", "", lower)
 
     budget_match = (
-        re.search(r"(?:under|below|within|with|for|have|get|can|buy|around|budget|worth|up to)\s*(?:of|for|with|buy)?\s*(?:₦|naira|n)?\s*(\d[\d,]*)", clean_for_budget)
-        or re.search(r"(\d[\d,]*)\s*(?:naira|n)?\s*(?:can\s+buy|buy|get|data|bundle|plan)", clean_for_budget)
+        re.search(r"(?:under|below|within|for)\s*(?:₦|naira|n)?\s*(\d[\d,]*)", clean_for_budget)
+        or re.search(r"(\d[\d,]*)\s*(?:naira|n)?\s*(?:can\s+buy|buy|data)", clean_for_budget)
     )
 
     budget_limit: Optional[float] = None
@@ -951,17 +856,17 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         affordable.sort(key=lambda x: x["retail"])
 
         if not affordable:
-            return f"⚠️ No data bundles found under *₦{budget_limit:,.0f}*. Our cheapest plans start at *₦150*!"
+            return f"⚠️ No bundles under ₦{budget_limit:,.0f}."
 
         target_net = explicit_network or network
         return format_disambiguation_list(
             sender_phone=sender_phone, network=target_net, matching_plans=affordable,
             recipient_phone=recipient_phone, recipient_label=recipient_label,
-            header_title=f"💰 Bundles Within ₦{budget_limit:,.0f}"
+            header_title=f"💰 Bundles Under ₦{budget_limit:,.0f}"
         )
 
     # =========================================================================
-    # 13. HANDLE FOLLOW-UP REPLIES TO ACTIVE CONTEXT
+    # 13. HANDLE FOLLOW-UP REPLIES
     # =========================================================================
     if ctx.get("selected_plan") and recipient_phone and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
         chosen_plan = ctx["selected_plan"]
@@ -971,7 +876,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         if pending_name and phone_match:
             saved_c = save_user_contact(db, user, pending_name, recipient_phone, net)
             recipient_label = saved_c.display_name
-            auto_saved_note = f"✅ *Saved {saved_c.display_name} ({recipient_phone}) to your beneficiaries!*\n\n"
+            auto_saved_note = f"✅ *Saved {saved_c.display_name}*\n"
         return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label, extra_prefix_note=auto_saved_note)
 
     candidates: List[Dict[str, Any]] = ctx.get("candidates") or []
@@ -986,13 +891,8 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
                 else:
                     set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
-                    return (
-                        f"⚡ Great choice: *{chosen_plan['name']}* (*₦{chosen_plan['retail']:,.0f}*).\n\n"
-                        f"Which phone number or saved contact should I send it to?\n"
-                        f"_(Reply with a number, a saved name like `Mom`, or `for me`)_"
-                    )
+                    return f"⚡ {chosen_plan['name']}\nWhich phone number?"
 
-        # Meta Button Fallback logic
         narrowed = match_catalog_plan(network, lower)
         if narrowed:
             if len(narrowed) == 1:
@@ -1002,15 +902,12 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
                 else:
                     set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
-                    return (
-                        f"⚡ Great choice: *{chosen_plan['name']}* (*₦{chosen_plan['retail']:,.0f}*).\n\n"
-                        f"Which phone number or saved contact should I send it to?"
-                    )
+                    return f"⚡ {chosen_plan['name']}\nWhich phone number?"
             else:
                 return format_disambiguation_list(sender_phone, network, narrowed, recipient_phone, recipient_label)
 
     # =========================================================================
-    # 14. RAW NETWORK NAMES & NATURAL LANGUAGE DATA BUYING
+    # 14. RAW NETWORK NAMES & NATURAL LANGUAGE DATA
     # =========================================================================
     has_data_size = bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower))
     has_plan_keyword = any(k in lower for k in ["sme", "awoof", "gifting", "share", "social", "corp"])
@@ -1018,7 +915,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     if has_data_size or has_plan_keyword:
         matching_plans = match_catalog_plan(network, lower)
         if not matching_plans and network:
-            return f"⚠️ I couldn't find that exact bundle on *{network}*."
+            return f"⚠️ Plan not found."
 
         if len(matching_plans) == 1:
             chosen_plan = matching_plans[0]
@@ -1030,18 +927,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     sender_phone, network=resolved_net, selected_plan=chosen_plan,
                     candidates=None, pending_save_name=unsaved_contact_name
                 )
-                return (
-                    f"⚡ Got it: *{resolved_net} {chosen_plan['name']}* (*₦{chosen_plan['retail']:,.0f}*).\n\n"
-                    f"📒 You haven't saved *{unsaved_contact_name}'s* phone number yet!\n"
-                    f"Reply with *{unsaved_contact_name}'s 11-digit number* to prepare your order!"
-                )
+                return f"⚡ {chosen_plan['name']}\nReply with *{unsaved_contact_name}'s 11-digit number*."
             else:
                 set_conv_context(sender_phone, network=resolved_net, selected_plan=chosen_plan, candidates=None)
-                return (
-                    f"⚡ *{resolved_net} {chosen_plan['name']}* costs *₦{chosen_plan['retail']:,.0f}*.\n\n"
-                    f"Which phone number or saved contact should I send it to?\n"
-                    f"_(Reply with `08031234567`, `Mom`, or `for me`)_"
-                )
+                return f"⚡ {chosen_plan['name']}\nWhich phone number should I send it to?"
         elif len(matching_plans) > 1:
             return format_disambiguation_list(
                 sender_phone, network, matching_plans, recipient_phone, recipient_label,
@@ -1056,7 +945,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         return format_disambiguation_list(
             sender_phone=sender_phone, network=network, matching_plans=all_net_plans,
             recipient_phone=recipient_phone, recipient_label=recipient_label,
-            header_title=f"⚡ {network} Data Plans"
+            header_title=f"⚡ {network} Data"
         )
 
     # =========================================================================
@@ -1075,36 +964,36 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     "text": "⚡ Swiftwave Pay"
                 },
                 "body": {
-                    "text": f"Salam {first_name}! 👋\n\nJoin our WhatsApp Channel for updates:\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12\n\n💳 *Your Wallet:* ₦{user.wallet_balance:,.2f}\n\nTap the menu button below, or type *cmd* to see all commands!"
+                    "text": f"Salam {first_name}! 👋\nJoin Channel: https://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12\n\n💳 Wallet: ₦{user.wallet_balance:,.2f}\n\nTap Menu below or type *cmd*."
                 },
                 "footer": {
-                    "text": "1.5% Instant Cashback on all orders! 🎁"
+                    "text": "1.5% Cashback on orders!"
                 },
                 "action": {
                     "button": "Main Menu",
                     "sections": [
                         {
-                            "title": "📱 Digital Services",
+                            "title": "📱 Services",
                             "rows": [
-                                {"id": "cmd_buy_data", "title": "Buy Data", "description": "MTN, Airtel, GLO, 9Mobile"},
-                                {"id": "cmd_airtime", "title": "Airtime Recharge", "description": "Instant Top-up"},
-                                {"id": "cmd_talkmore", "title": "TalkMore Voice", "description": "Sachet Voice Minutes"},
-                                {"id": "cmd_exam_pin", "title": "Exam PIN", "description": "WAEC, NECO, NABTEB"}
+                                {"id": "cmd_buy_data", "title": "Buy Data"},
+                                {"id": "cmd_airtime", "title": "Airtime Recharge"},
+                                {"id": "cmd_talkmore", "title": "TalkMore Voice"},
+                                {"id": "cmd_exam_pin", "title": "Exam PIN"}
                             ]
                         },
                         {
-                            "title": "⚙️ Account & Tools",
+                            "title": "⚙️ Account Tools",
                             "rows": [
-                                {"id": "cmd_balance", "title": "My Wallet Balance", "description": "Check balance & fund"},
-                                {"id": "cmd_repeat", "title": "Repeat Last Order", "description": "Buy again instantly"},
-                                {"id": "cmd_history", "title": "Transaction History", "description": "See recent orders"}
+                                {"id": "cmd_balance", "title": "Wallet Balance"},
+                                {"id": "cmd_repeat", "title": "Repeat Last Order"},
+                                {"id": "cmd_history", "title": "Transaction History"}
                             ]
                         },
                         {
-                            "title": "🌐 Explore More",
+                            "title": "🌐 Explore",
                             "rows": [
-                                {"id": "cmd_mall", "title": "Swiftwave Mall", "description": "Shop gadgets & accessories"},
-                                {"id": "cmd_help", "title": "All Commands", "description": "View typing instructions"}
+                                {"id": "cmd_mall", "title": "Swiftwave Mall"},
+                                {"id": "cmd_help", "title": "All Commands"}
                             ]
                         }
                     ]
@@ -1119,12 +1008,4 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     if ai_reply:
         return ai_reply
 
-    return (
-        "🤖 *Swiftwave Pay*\n\n"
-        "💡 *Chat naturally with me! Try typing:*\n"
-        "• _'Send 2GB MTN to Mom'_\n"
-        "• _'Save 08012345678 as Dad'_\n"
-        "• _'Buy WAEC pin'_\n"
-        "• _'Talkmore for me'_\n"
-        "• _'What Airtel data can 1500 buy?'_"
-    )
+    return "🤖 Try typing: _'Send 2GB MTN to Mom'_ or _'cmd'_."
