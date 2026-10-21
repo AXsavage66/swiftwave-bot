@@ -368,7 +368,7 @@ KEY FACTS YOU MUST FOLLOW:
    - Direct Airtime Top-up.
    - Instant Exam Result Checker PINs: WAEC (₦3,800), NECO (₦1,350), NABTEB (₦1,200). Saved in user's 'my pins' vault.
    - 1.5% Instant Cashback on every purchase + ₦100 Direct Referral bonus.
-2. Note: Utility bills, TV renewals, and DropBot dispatch are Phase 2 and NOT active yet. Do not offer them.
+2. Note: Utility bills and Cable TV renewals are Phase 2 and NOT active yet. Do not offer them.
 3. Customer's current Wallet Balance: ₦{user.wallet_balance:,.2f}. Saved Beneficiaries: {saved_names}.
 4. In test/sandbox mode, the user can type 'fund 5000' to add test balance.
 5. Never invent prices outside the catalog. Guide the user on exact phrases they can type, such as: 'Send 2GB MTN to Mom', 'Save 08012345678 as Dad', 'Buy WAEC pin', 'Talkmore for me', or 'cmd'.
@@ -569,8 +569,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         return (
             "🛍️ *Swiftwave Variety Mall (Shop 9 & 10, ABH Plaza, Minna)*\n\n"
             "Shop gadgets, phone accessories, ring lights & daily essentials online:\n"
-            "👉 https://swiftwave-variety-mall.vercel.app\n\n"
-            "_(Note: Utility Bills and DropBot dispatch features are coming in Phase 2!)_"
+            "👉 https://swiftwave-variety-mall.vercel.app"
         )
 
     # =========================================================================
