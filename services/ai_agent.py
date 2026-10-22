@@ -215,7 +215,7 @@ def save_user_contact(db: Session, user: User, name_clean: str, norm_phone: str,
 
 def get_main_menu(user: User, prefix_text: str = "") -> List[Dict[str, Any]]:
     first_name = user.name.split()[0]
-    welcome_text = f"{prefix_text}Hi {first_name}! 👋\n\nWelcome to Swiftwave - Smart Pay! 🤖\nJust tell me what you need! Meanwhile, join our WhatsApp Channel for update.\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12"
+    welcome_text = f"{prefix_text}Salam {first_name}! 👋\n\nWelcome to Swiftwave - Smart Pay! 🤖\nJust tell me what you need! Meanwhile, join our WhatsApp Channel for updates.\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12"
     
     return [
         {
@@ -386,11 +386,11 @@ def ask_gemini_assistant(user: User, contacts: List[SavedContact], user_message:
     saved_names = ", ".join([f"{c.display_name} ({c.phone_number})" for c in contacts]) or "None yet"
 
     system_prompt = f"""
-You are Swiftwave Pay. Be extremely minimal and direct. NO LONG PARAGRAPHS. Keep responses under 30 words.
-1. Phase 1 Services: Cheap Data, TalkMore Voice Minutes, Airtime, WAEC/NECO PINs.
-2. Utility bills and Cable TV are Phase 2. Do not offer them.
-3. Wallet: ₦{user.wallet_balance:,.2f}. Contacts: {saved_names}.
-4. Guide users briefly if they need help (e.g. 'Type cmd' or 'Send 2GB MTN to Mom').
+You are Swiftwave Pay, an AI digital VTU assistant. 
+Maintain a polite, professional, and helpful tone grounded in mainstream Islamic values (halal/tayyib).
+If the user asks for pizza, food, or unrelated physical items, politely explain that you only handle digital services (Data, Airtime, TalkMore, Exam PINs).
+If the user asks for a list of services, what you can do, your capabilities, options, or help, strictly reply with EXACTLY this word and nothing else: TRIGGER_MAIN_MENU
+Keep conversational responses under 30 words.
 """
 
     payload = {
@@ -442,7 +442,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     # 0B. GLOBAL ESCAPE ROUTES (Menu & Cancel)
     # =========================================================================
-    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening", "cmd_menu", "🏠 menu", "main menu"}:
+    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening", "cmd_menu", "🏠 menu", "main menu"} or any(phrase in lower for phrase in ["capabilities", "what do you offer", "options", "what can you do"]):
         clear_conv_context(sender_phone)
         return get_main_menu(user)
 
@@ -601,8 +601,8 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
 
     if lower == "mall" or any(k in lower for k in ["variety mall", "swiftwave wear", "ecosystem"]):
         return (
-            "🛍️ *Swiftwave Variety Mall*\n"
-            "Shop gadgets & accessories:\n"
+            "🛍️ *Swiftwave Variety Mall*\n\n"
+            "Elevate your lifestyle with our curated selection of premium gadgets, everyday essentials, and unique finds. Quality you can trust, delivered with ease.\n\n"
             "👉 https://swiftwave-variety-mall.vercel.app"
         )
 
@@ -1018,7 +1018,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
 
     # =========================================================================
-    # 13. STRICT TRAPS: FOLLOW-UP REPLIES (INVALID PHONE & MISMATCH)
+    # 13. STRICT TRAPS: FOLLOW-UP REPLIES & CONTEXT MEMORY
     # =========================================================================
     if ctx.get("selected_plan") and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
         if not recipient_phone:
@@ -1075,6 +1075,20 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 else:
                     set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
                     return "Enter the recipient phone number 📱"
+                    
+        # Apply strict follow-up context filtering (e.g. searching for '1gb' inside 'weekly' plans)
+        narrowed_candidates = filter_plans_by_attributes(candidates, lower, strict=False)
+        if narrowed_candidates and len(narrowed_candidates) < len(candidates):
+            if len(narrowed_candidates) == 1:
+                chosen_plan = narrowed_candidates[0]
+                net = chosen_plan.get("network") or network or "MTN"
+                if recipient_phone:
+                    return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
+                else:
+                    set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
+                    return "Enter the recipient phone number 📱"
+            else:
+                return format_disambiguation_list(sender_phone, network, narrowed_candidates, recipient_phone, recipient_label)
 
         narrowed = match_catalog_plan(network, lower)
         if narrowed:
@@ -1136,6 +1150,9 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     ai_reply = ask_gemini_assistant(user, contacts, text)
     if ai_reply:
+        if "TRIGGER_MAIN_MENU" in ai_reply:
+            clear_conv_context(sender_phone)
+            return get_main_menu(user)
         return ai_reply
 
     return "🤖 Try typing: _'Send 2GB MTN to Mom'_ or _'cmd'_."
