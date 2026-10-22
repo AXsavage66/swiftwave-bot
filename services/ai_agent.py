@@ -214,7 +214,6 @@ def save_user_contact(db: Session, user: User, name_clean: str, norm_phone: str,
 
 
 def get_main_menu(user: User, prefix_text: str = "") -> List[Dict[str, Any]]:
-    """Helper to generate the dual-message interactive Main Menu"""
     first_name = user.name.split()[0]
     welcome_text = f"{prefix_text}Hi {first_name}! 👋\n\nWelcome to Swiftwave - Smart Pay! 🤖\nJust tell me what you need! Meanwhile, join our WhatsApp Channel for update.\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12"
     
@@ -278,15 +277,6 @@ def stage_pending_order(
 
     recip_display = f"{recipient_phone}" if not recipient_label else f"{recipient_label} ({recipient_phone})"
 
-    detected_prefix_net = detect_network_from_phone(recipient_phone)
-    prefix_warning = ""
-    if (
-        detected_prefix_net
-        and network.upper() in ("MTN", "AIRTEL", "GLO", "9MOBILE")
-        and detected_prefix_net != network.upper()
-    ):
-        prefix_warning = f"\n\n⚠️ *Note:* `{recipient_phone}` is a *{detected_prefix_net}* number."
-
     body_text = (
         f"{extra_prefix_note}"
         f"📋 *Purchase Summary*\n\n"
@@ -295,7 +285,6 @@ def stage_pending_order(
         f"💰 *Price:* ₦{plan['retail']:,.0f}\n"
         f"📱 *Phone:* {recip_display}\n\n"
         f"💳 *Wallet Balance:* ₦{user.wallet_balance:,.2f}"
-        f"{prefix_warning}"
     )
 
     buttons = []
@@ -623,7 +612,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     fund_match = re.search(r"\b(?:fund|topup|top up|credit)\b.*?(\d[\d,]*)", lower)
     if fund_match:
         amount = float(fund_match.group(1).replace(",", ""))
-        if 100 <= amount <= 100000:
+        if 100 <= amount <= 1000000:
             user.wallet_balance = round(user.wallet_balance + amount, 2)
             txn = Transaction(
                 user_id=user.id,
@@ -655,6 +644,8 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 }
             else:
                 return success_text + "\n\nWhat would you like to buy?"
+        elif amount > 1000000:
+            return "⚠️ Maximum wallet funding per transaction is ₦1,000,000."
 
     # =========================================================================
     # 4. WALLET BALANCE & REFERRAL / CASHBACK REWARDS
@@ -765,18 +756,30 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     ctx = get_conv_context(sender_phone)
     
-    if ctx.get("pending_action") == "airtime_prompt":
+    if ctx.get("pending_action") == "airtime_amount_prompt":
         amt_clean = re.sub(r"\D", "", lower)
         if amt_clean and 50 <= int(amt_clean) <= 50000:
             airtime_amt = float(amt_clean)
+            network = ctx.get("network") or "MTN"
             airtime_plan = {
-                "key": f"AIRTIME_{int(airtime_amt)}", "network": "MTN", "plan_id": 999,
+                "key": f"AIRTIME_{int(airtime_amt)}", "network": network, "plan_id": 999,
                 "name": f"₦{airtime_amt:,.0f} Airtime", "cost": round(airtime_amt * 0.97, 2), "retail": airtime_amt
             }
             set_conv_context(sender_phone, selected_plan=airtime_plan, pending_action=None)
             return "Enter the recipient phone number 📱"
         else:
-            return "⚠️ Amount must be between ₦50 and ₦50,000.\nPlease enter a valid amount (e.g. 500):"
+            return {
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": "⚠️ Please enter a valid amount between ₦50 and ₦50,000 (e.g. 500)."},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "cancel_order", "title": "❌ Cancel"}}
+                        ]
+                    }
+                }
+            }
 
     # =========================================================================
     # 8. EXTRACT ENTITIES (CONTACT, UNSAVED NAME, PHONE, NETWORK)
@@ -905,7 +908,29 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # 11. DIRECT AIRTIME TOP-UP
     # =========================================================================
     if lower in {"airtime recharge", "airtime", "cmd_airtime"}:
-        set_conv_context(sender_phone, pending_action="airtime_prompt")
+        return {
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": "Select a network for Airtime:"},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "air_airtel", "title": "AIRTEL Airtime"}},
+                        {"type": "reply", "reply": {"id": "air_glo", "title": "GLO Airtime"}},
+                        {"type": "reply", "reply": {"id": "air_mtn", "title": "MTN Airtime"}}
+                    ]
+                }
+            }
+        }
+        
+    if lower in {"air_mtn", "mtn airtime"}:
+        set_conv_context(sender_phone, network="MTN", pending_action="airtime_amount_prompt")
+        return "Enter the amount you want to buy ₦ (e.g 500):"
+    elif lower in {"air_airtel", "airtel airtime"}:
+        set_conv_context(sender_phone, network="AIRTEL", pending_action="airtime_amount_prompt")
+        return "Enter the amount you want to buy ₦ (e.g 500):"
+    elif lower in {"air_glo", "glo airtime"}:
+        set_conv_context(sender_phone, network="GLO", pending_action="airtime_amount_prompt")
         return "Enter the amount you want to buy ₦ (e.g 500):"
         
     if any(k in lower for k in ["airtime", "credit", "recharge card"]):
@@ -993,14 +1018,41 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
 
     # =========================================================================
-    # 13. HANDLE FOLLOW-UP REPLIES (WITH STRICT GUARDRAIL FOR PHONE NUMBERS)
+    # 13. STRICT TRAPS: FOLLOW-UP REPLIES (INVALID PHONE & MISMATCH)
     # =========================================================================
     if ctx.get("selected_plan") and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
         if not recipient_phone:
-            return "⚠️ Please enter a valid 11-digit phone number (e.g., 08031234567) 📱"
+            return {
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": "⚠️ Please enter a valid 11-digit phone number (e.g., 08031234567) 📱"},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "cancel_order", "title": "❌ Cancel"}}
+                        ]
+                    }
+                }
+            }
             
         chosen_plan = ctx["selected_plan"]
         net = chosen_plan.get("network") or detect_network_from_phone(recipient_phone) or ctx.get("network") or "MTN"
+        
+        detected_prefix_net = detect_network_from_phone(recipient_phone)
+        if detected_prefix_net and net.upper() in ["MTN", "AIRTEL", "GLO", "9MOBILE"] and detected_prefix_net != net.upper():
+            return {
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": f"⚠️ *Network Mismatch*\n\nYou entered an *{detected_prefix_net}* number, but you are trying to buy an *{net.upper()}* plan.\n\nPlease enter the correct {net.upper()} number, or click Cancel."},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "cancel_order", "title": "❌ Cancel"}}
+                        ]
+                    }
+                }
+            }
+
         auto_saved_note = ""
         pending_name = ctx.get("pending_save_name")
         if pending_name and phone_match:
