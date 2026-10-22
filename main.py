@@ -69,7 +69,14 @@ def handle_incoming_whatsapp(sender_phone: str, message_text: str, profile_name:
     db = SessionLocal()
     try:
         reply_data = process_user_message(db, sender_phone, message_text, profile_name)
-        send_whatsapp_message(sender_phone, reply_data)
+        
+        # FIX: Check if the AI returned a list of multiple messages (like our new dual-menu)
+        if isinstance(reply_data, list):
+            for message_item in reply_data:
+                send_whatsapp_message(sender_phone, message_item)
+        else:
+            send_whatsapp_message(sender_phone, reply_data)
+            
     except Exception as e:
         print(f"🚨 Error processing WhatsApp message from {sender_phone}: {e}")
     finally:
