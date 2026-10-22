@@ -220,7 +220,7 @@ def stage_pending_order(
     recipient_phone: str,
     recipient_label: Optional[str] = None,
     extra_prefix_note: str = ""
-) -> str:
+) -> Dict[str, Any]:
     clear_conv_context(user.phone_number)
     db.query(PendingOrder).filter(PendingOrder.user_id == user.id).delete()
 
@@ -238,7 +238,7 @@ def stage_pending_order(
     db.add(pending)
     db.commit()
 
-    recip_display = f"{recipient_label} ({recipient_phone})" if recipient_label else recipient_phone
+    recip_display = f"{recipient_phone}" if not recipient_label else f"{recipient_label} ({recipient_phone})"
 
     detected_prefix_net = detect_network_from_phone(recipient_phone)
     prefix_warning = ""
@@ -247,23 +247,36 @@ def stage_pending_order(
         and network.upper() in ("MTN", "AIRTEL", "GLO", "9MOBILE")
         and detected_prefix_net != network.upper()
     ):
-        prefix_warning = f"\n⚠️ *Note:* `{recipient_phone}` is a *{detected_prefix_net}* number.\n"
+        prefix_warning = f"\n\n⚠️ *Note:* `{recipient_phone}` is a *{detected_prefix_net}* number."
 
-    balance_warning = ""
-    if user.wallet_balance < plan["retail"]:
-        balance_warning = f"\n⚠️ Wallet too low. Reply *fund 5000* to top up.\n"
-
-    cashback_preview = round(plan["retail"] * 0.015, 2)
-
-    return (
+    body_text = (
         f"{extra_prefix_note}"
-        f"🛒 *Confirm Order*\n"
-        f"📱 {network.upper()} {plan['name']} ➔ {recip_display}\n"
-        f"💰 ₦{plan['retail']:,.0f} (Cashback: +₦{cashback_preview:,.2f})\n"
-        f"💳 Wallet: ₦{user.wallet_balance:,.2f}\n"
-        f"{prefix_warning}{balance_warning}\n"
-        f"✅ Reply *YES* or *CANCEL*"
+        f"📋 *Purchase Summary*\n\n"
+        f"📡 *Network:* {network.upper()}\n"
+        f"📦 *Plan:* {plan['name']}\n"
+        f"💰 *Price:* ₦{plan['retail']:,.0f}\n"
+        f"📱 *Phone:* {recip_display}\n\n"
+        f"💳 *Wallet Balance:* ₦{user.wallet_balance:,.2f}"
+        f"{prefix_warning}"
     )
+
+    buttons = []
+    if user.wallet_balance >= plan["retail"]:
+        buttons.append({"type": "reply", "reply": {"id": "confirm_order", "title": "✅ Confirm"}})
+    else:
+        deficit = plan["retail"] - user.wallet_balance
+        body_text += f"\n\n⚠️ *Wallet too low.* You need ₦{deficit:,.2f} more. Reply *fund {int(deficit + 100)}* to top up instantly."
+
+    buttons.append({"type": "reply", "reply": {"id": "cancel_order", "title": "❌ Cancel"}})
+
+    return {
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": body_text},
+            "action": {"buttons": buttons}
+        }
+    }
 
 
 def format_disambiguation_list(
@@ -400,7 +413,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         return "⚠️ No active menu. Type *menu*."
 
     # =========================================================================
-    # 0B. DEEP NESTED CLICK ROUTING (Phase 1 Focused)
+    # 0B. DEEP NESTED CLICK ROUTING & ALIASES
     # =========================================================================
     if lower == "my wallet balance":
         lower = "balance"
@@ -467,9 +480,6 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             }
         }
 
-    if lower in {"airtime recharge", "airtime", "cmd_airtime"}:
-        return "📱 *Airtime*\nHow much and for which number?\n_Example: Send 500 to Mom_"
-
     # =========================================================================
     # 1. CHECK FOR PENDING ORDER CONFIRMATION
     # =========================================================================
@@ -486,7 +496,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         pending = None
 
     if pending:
-        if lower in {"yes", "y", "confirm", "send", "proceed", "ok", "okay", "sure"}:
+        if lower in {"yes", "y", "confirm", "send", "proceed", "ok", "okay", "sure", "confirm_order", "✅ confirm", "✅ confirm order"}:
             order_info = {
                 "network": pending.network,
                 "plan_id": pending.plan_id,
@@ -508,9 +518,24 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 retail_price=order_info["retail_price"],
                 plan_name=order_info["plan_name"]
             )
-            return result["message"]
+            
+            # Wrap the string result in our interactive Menu button payload
+            buttons = []
+            if str(order_info["plan_id"]) in ["801", "802", "803"]:
+                buttons.append({"type": "reply", "reply": {"id": "cmd_my_pins", "title": "🔒 My Pins"}})
+                
+            buttons.append({"type": "reply", "reply": {"id": "cmd_menu", "title": "🏠 Menu"}})
+            
+            return {
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": result["message"]},
+                    "action": {"buttons": buttons}
+                }
+            }
 
-        if lower in {"no", "n", "cancel", "stop", "abort"}:
+        if lower in {"no", "n", "cancel", "stop", "abort", "cancel_order", "❌ cancel"}:
             db.delete(pending)
             db.commit()
             clear_conv_context(sender_phone)
@@ -521,17 +546,24 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     if lower in {"cmd", "commands", "/cmd", "/help"}:
         return (
-            "📋 *Commands*\n"
-            "📦 *data* — Buy data\n"
-            "🎉 *talkmore* — Voice Minutes\n"
-            "📱 *airtime* — Buy airtime\n"
-            "🎓 *waec* / *neco* — Exam PINs\n"
-            "💰 *bal* — Check wallet\n"
-            "🔁 *repeat* — Repeat last order\n"
-            "🛍️ *mall* — Shop online\n\n"
-            "💡 *Try typing:*\n"
+            "📋 *Swiftwave Pay Commands*\n\n"
+            "📦 *data* — Browse & buy data bundles\n"
+            "🎉 *awoof / talkmore* — Sachet Voice Minutes\n"
+            "📱 *airtime* — Instant airtime top-up\n"
+            "🎓 *waec / neco* — Buy Exam Result Checker PINs\n"
+            "🔒 *my pins* — View your purchased PINs\n"
+            "💰 *bal / balance* — Check wallet & funding account\n"
+            "🔗 *ref / referral* — Your referral link & rewards\n"
+            "📒 *my beneficiaries* — View saved numbers\n"
+            "🔁 *repeat* — Repeat your last order in 1 tap\n"
+            "🧾 *history* — See your last 5 transactions\n"
+            "🛍️ *mall* — Shop gadgets at Swiftwave Mall\n\n"
+            "💡 *Chat naturally with me! Try typing:*\n"
             "• _'Send 2GB MTN to Mom'_\n"
-            "• _'Save 08012345678 as Dad'_"
+            "• _'Save 08012345678 as Dad'_\n"
+            "• _'Buy WAEC pin'_\n"
+            "• _'Talkmore for me'_\n"
+            "• _'What Airtel data can 1500 buy?'_"
         )
 
     if lower == "mall" or any(k in lower for k in ["variety mall", "swiftwave wear", "ecosystem"]):
@@ -558,7 +590,27 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             )
             db.add(txn)
             db.commit()
-            return f"💰 *Wallet Funded!*\n➕ Added: ₦{amount:,.2f}\n💳 Balance: ₦{user.wallet_balance:,.2f}\n\nWhat would you like to buy?"
+            
+            success_text = f"💰 *Wallet Funded!*\n➕ Added: ₦{amount:,.2f}\n💳 New Balance: ₦{user.wallet_balance:,.2f}"
+            
+            check_pending = db.query(PendingOrder).filter(PendingOrder.user_id == user.id).order_by(PendingOrder.created_at.desc()).first()
+            if check_pending:
+                success_text += f"\n\n🛒 You have a pending order for {check_pending.plan_name} to {check_pending.recipient_phone}. Would you like to complete it?"
+                return {
+                    "type": "interactive",
+                    "interactive": {
+                        "type": "button",
+                        "body": {"text": success_text},
+                        "action": {
+                            "buttons": [
+                                {"type": "reply", "reply": {"id": "confirm_order", "title": "✅ Confirm Order"}},
+                                {"type": "reply", "reply": {"id": "cancel_order", "title": "❌ Cancel"}}
+                            ]
+                        }
+                    }
+                }
+            else:
+                return success_text + "\n\nWhat would you like to buy?"
 
     # =========================================================================
     # 4. WALLET BALANCE & REFERRAL / CASHBACK REWARDS
@@ -617,7 +669,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     # 6. EXAM PIN VAULT & HISTORY
     # =========================================================================
-    if any(k in lower for k in ["my pins", "my pin", "saved pins", "exam pins", "checker pin"]):
+    if any(k in lower for k in ["my pins", "my pin", "saved pins", "exam pins", "checker pin", "cmd_my_pins"]):
         pin_orders = (
             db.query(Order)
             .filter(Order.user_id == user.id, Order.plan_id.in_(["801", "802", "803"]))
@@ -651,9 +703,22 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         return "\n".join(lines)
 
     # =========================================================================
-    # 7. EXTRACT ENTITIES (CONTACT, UNSAVED NAME, PHONE, "FOR ME", NETWORK)
+    # 7. EXTRACT ENTITIES & AIRTIME STATE HANDLER
     # =========================================================================
     ctx = get_conv_context(sender_phone)
+    
+    # Catch standalone airtime amount input
+    if ctx.get("pending_action") == "airtime_prompt" and re.match(r"^\d{2,5}$", lower):
+        airtime_amt = float(lower)
+        if 50 <= airtime_amt <= 50000:
+            airtime_plan = {
+                "key": f"AIRTIME_{int(airtime_amt)}", "network": "MTN", "plan_id": 999,
+                "name": f"₦{airtime_amt:,.0f} Airtime", "cost": round(airtime_amt * 0.97, 2), "retail": airtime_amt
+            }
+            set_conv_context(sender_phone, selected_plan=airtime_plan)
+            return "Enter the recipient phone number 📱"
+        else:
+            return "⚠️ Amount must be between ₦50 and ₦50,000."
 
     matched_contact: Optional[SavedContact] = None
     for c in contacts:
@@ -767,7 +832,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 return f"⚡ {chosen_tm['name']}\nReply with *{unsaved_contact_name}'s 11-digit phone number*."
             else:
                 set_conv_context(sender_phone, network=network or "MTN", selected_plan=chosen_tm, candidates=None)
-                return f"⚡ {chosen_tm['name']}\nWhich phone number should I send it to?"
+                return "Enter the recipient phone number 📱"
 
         return format_disambiguation_list(
             sender_phone=sender_phone, network=network or "MTN", matching_plans=tm_plans,
@@ -778,6 +843,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     # 10. DIRECT AIRTIME TOP-UP
     # =========================================================================
+    if lower in {"airtime recharge", "airtime", "cmd_airtime"}:
+        set_conv_context(sender_phone, pending_action="airtime_prompt")
+        return "Enter the amount you want to buy ₦ (e.g 500):"
+        
     if any(k in lower for k in ["airtime", "credit", "recharge card"]):
         amt_match = re.search(r"(?:₦|naira|n)?\s*(\d{2,5})\b", re.sub(r"\b(?:\+?234|0)[789][01]\d{8}\b", "", lower))
         if amt_match:
@@ -797,8 +866,8 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     return f"📱 Ready to send ₦{airtime_amt:,.0f} Airtime.\nReply with *{unsaved_contact_name}'s 11-digit number*."
                 else:
                     set_conv_context(sender_phone, network=network or "MTN", selected_plan=airtime_plan, candidates=None)
-                    return f"📱 Ready to send ₦{airtime_amt:,.0f} Airtime.\nWhich phone number should I recharge?"
-        return "📱 *Airtime*\nHow much and to which number?\n_Example: Send 500 to Mom_"
+                    return "Enter the recipient phone number 📱"
+        return "Enter the amount you want to buy ₦ (e.g 500):"
 
     # =========================================================================
     # 11. REPEAT LAST ORDER
@@ -891,7 +960,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
                 else:
                     set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
-                    return f"⚡ {chosen_plan['name']}\nWhich phone number?"
+                    return "Enter the recipient phone number 📱"
 
         narrowed = match_catalog_plan(network, lower)
         if narrowed:
@@ -902,7 +971,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
                 else:
                     set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
-                    return f"⚡ {chosen_plan['name']}\nWhich phone number?"
+                    return "Enter the recipient phone number 📱"
             else:
                 return format_disambiguation_list(sender_phone, network, narrowed, recipient_phone, recipient_label)
 
@@ -930,7 +999,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 return f"⚡ {chosen_plan['name']}\nReply with *{unsaved_contact_name}'s 11-digit number*."
             else:
                 set_conv_context(sender_phone, network=resolved_net, selected_plan=chosen_plan, candidates=None)
-                return f"⚡ {chosen_plan['name']}\nWhich phone number should I send it to?"
+                return "Enter the recipient phone number 📱"
         elif len(matching_plans) > 1:
             return format_disambiguation_list(
                 sender_phone, network, matching_plans, recipient_phone, recipient_label,
@@ -951,11 +1020,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     # 15. MAIN GREETING / HOME MENU (DUAL INLINE BUTTON MESSAGES)
     # =========================================================================
-    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening"}:
+    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening", "cmd_menu"}:
         clear_conv_context(sender_phone)
         first_name = user.name.split()[0]
         
-        # We return a List of two interactive messages to bypass the 3-button limit
         return [
             {
                 "type": "interactive",
