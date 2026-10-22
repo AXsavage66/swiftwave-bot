@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import math
 import json
 import requests
 from datetime import datetime, timedelta
@@ -212,6 +213,43 @@ def save_user_contact(db: Session, user: User, name_clean: str, norm_phone: str,
     return new_contact
 
 
+def get_main_menu(user: User, prefix_text: str = "") -> List[Dict[str, Any]]:
+    """Helper to generate the dual-message interactive Main Menu"""
+    first_name = user.name.split()[0]
+    welcome_text = f"{prefix_text}Hi {first_name}! 👋\n\nWelcome to Swiftwave - Smart Pay! 🤖\nJust tell me what you need! Meanwhile, join our WhatsApp Channel for update.\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12"
+    
+    return [
+        {
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": welcome_text.strip()},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "cmd_buy_data", "title": "Buy Data"}},
+                        {"type": "reply", "reply": {"id": "cmd_airtime", "title": "Airtime"}},
+                        {"type": "reply", "reply": {"id": "cmd_talkmore", "title": "TalkMore"}}
+                    ]
+                }
+            }
+        },
+        {
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": "More options..."},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "cmd_exam_pin", "title": "Exam PIN"}},
+                        {"type": "reply", "reply": {"id": "cmd_mall", "title": "Swiftwave Mall"}},
+                        {"type": "reply", "reply": {"id": "cmd_more_cmds", "title": "Help / Commands"}}
+                    ]
+                }
+            }
+        }
+    ]
+
+
 def stage_pending_order(
     db: Session,
     user: User,
@@ -265,7 +303,7 @@ def stage_pending_order(
         buttons.append({"type": "reply", "reply": {"id": "confirm_order", "title": "✅ Confirm"}})
     else:
         deficit = plan["retail"] - user.wallet_balance
-        body_text += f"\n\n⚠️ *Wallet too low.* You need ₦{deficit:,.2f} more. Reply *fund {int(deficit + 100)}* to top up instantly."
+        body_text += f"\n\n⚠️ *Wallet too low.* You need ₦{deficit:,.2f} more. Reply *fund {math.ceil(deficit)}* to top up instantly."
 
     buttons.append({"type": "reply", "reply": {"id": "cancel_order", "title": "❌ Cancel"}})
 
@@ -388,7 +426,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     lower = text.lower()
 
     # =========================================================================
-    # 0. HANDLE PAGINATION CLICKS FIRST
+    # 0. HANDLE PAGINATION CLICKS
     # =========================================================================
     if lower in {"next ➡️", "next", "next page"}:
         ctx = get_conv_context(sender_phone)
@@ -413,7 +451,20 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         return "⚠️ No active menu. Type *menu*."
 
     # =========================================================================
-    # 0B. DEEP NESTED CLICK ROUTING & ALIASES
+    # 0B. GLOBAL ESCAPE ROUTES (Menu & Cancel)
+    # =========================================================================
+    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening", "cmd_menu", "🏠 menu", "main menu"}:
+        clear_conv_context(sender_phone)
+        return get_main_menu(user)
+
+    if lower in {"no", "n", "cancel", "stop", "abort", "cancel_order", "❌ cancel"}:
+        db.query(PendingOrder).filter(PendingOrder.user_id == user.id).delete()
+        db.commit()
+        clear_conv_context(sender_phone)
+        return get_main_menu(user, prefix_text="🚫 Cancelled.\n\n")
+
+    # =========================================================================
+    # 0C. DEEP NESTED CLICK ROUTING & ALIASES
     # =========================================================================
     if lower == "my wallet balance":
         lower = "balance"
@@ -464,7 +515,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             }
         }
 
-    if lower in {"exam pin", "cmd_exam_pin"}:
+    if lower in {"exam pin", "cmd_exam_pin", "🎓 exam pin", "exam pins"}:
         return {
             "type": "interactive",
             "interactive": {
@@ -519,7 +570,6 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 plan_name=order_info["plan_name"]
             )
             
-            # Wrap the string result in our interactive Menu button payload
             buttons = []
             if str(order_info["plan_id"]) in ["801", "802", "803"]:
                 buttons.append({"type": "reply", "reply": {"id": "cmd_my_pins", "title": "🔒 My Pins"}})
@@ -534,12 +584,6 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     "action": {"buttons": buttons}
                 }
             }
-
-        if lower in {"no", "n", "cancel", "stop", "abort", "cancel_order", "❌ cancel"}:
-            db.delete(pending)
-            db.commit()
-            clear_conv_context(sender_phone)
-            return "🚫 Cancelled."
 
     # =========================================================================
     # 2. COMMANDS LIST ('cmd' / 'help') & SWIFTWAVE MALL
@@ -603,7 +647,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                         "body": {"text": success_text},
                         "action": {
                             "buttons": [
-                                {"type": "reply", "reply": {"id": "confirm_order", "title": "✅ Confirm Order"}},
+                                {"type": "reply", "reply": {"id": "confirm_order", "title": "✅ Confirm"}},
                                 {"type": "reply", "reply": {"id": "cancel_order", "title": "❌ Cancel"}}
                             ]
                         }
@@ -669,7 +713,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     # 6. EXAM PIN VAULT & HISTORY
     # =========================================================================
-    if any(k in lower for k in ["my pins", "my pin", "saved pins", "exam pins", "checker pin", "cmd_my_pins"]):
+    if any(k in lower for k in ["my pins", "my pin", "saved pins", "exam pins", "checker pin", "cmd_my_pins", "🔒 my pins"]):
         pin_orders = (
             db.query(Order)
             .filter(Order.user_id == user.id, Order.plan_id.in_(["801", "802", "803"]))
@@ -678,11 +722,25 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             .all()
         )
         if not pin_orders:
-            return "🎓 No PINs purchased yet."
-        lines = ["🔒 *Your Exam PINs:*"]
-        for o in pin_orders:
-            lines.append(f"• {o.network}: `{o.external_ref}`")
-        return "\n".join(lines)
+            text_ans = "🎓 No PINs purchased yet."
+        else:
+            lines = ["🔒 *Your Exam PINs:*"]
+            for o in pin_orders:
+                lines.append(f"• {o.network}: `{o.external_ref}`")
+            text_ans = "\n".join(lines)
+            
+        return {
+            "type": "interactive",
+            "interactive": {
+                "type": "button",
+                "body": {"text": text_ans},
+                "action": {
+                    "buttons": [
+                        {"type": "reply", "reply": {"id": "cmd_menu", "title": "🏠 Menu"}}
+                    ]
+                }
+            }
+        }
 
     if any(k in lower for k in ["history", "my orders", "recent orders", "transactions", "last receipt"]):
         recent_orders = (
@@ -703,23 +761,26 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         return "\n".join(lines)
 
     # =========================================================================
-    # 7. EXTRACT ENTITIES & AIRTIME STATE HANDLER
+    # 7. AIRTIME PROMPT STATE HANDLER
     # =========================================================================
     ctx = get_conv_context(sender_phone)
     
-    # Catch standalone airtime amount input
-    if ctx.get("pending_action") == "airtime_prompt" and re.match(r"^\d{2,5}$", lower):
-        airtime_amt = float(lower)
-        if 50 <= airtime_amt <= 50000:
+    if ctx.get("pending_action") == "airtime_prompt":
+        amt_clean = re.sub(r"\D", "", lower)
+        if amt_clean and 50 <= int(amt_clean) <= 50000:
+            airtime_amt = float(amt_clean)
             airtime_plan = {
                 "key": f"AIRTIME_{int(airtime_amt)}", "network": "MTN", "plan_id": 999,
                 "name": f"₦{airtime_amt:,.0f} Airtime", "cost": round(airtime_amt * 0.97, 2), "retail": airtime_amt
             }
-            set_conv_context(sender_phone, selected_plan=airtime_plan)
+            set_conv_context(sender_phone, selected_plan=airtime_plan, pending_action=None)
             return "Enter the recipient phone number 📱"
         else:
-            return "⚠️ Amount must be between ₦50 and ₦50,000."
+            return "⚠️ Amount must be between ₦50 and ₦50,000.\nPlease enter a valid amount (e.g. 500):"
 
+    # =========================================================================
+    # 8. EXTRACT ENTITIES (CONTACT, UNSAVED NAME, PHONE, NETWORK)
+    # =========================================================================
     matched_contact: Optional[SavedContact] = None
     for c in contacts:
         if re.search(rf"\b{re.escape(c.nickname)}\b", lower):
@@ -785,7 +846,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         network = ctx.get("network")
 
     # =========================================================================
-    # 8. WAEC / NECO / NABTEB RESULT CHECKER PINS
+    # 9. WAEC / NECO / NABTEB RESULT CHECKER PINS
     # =========================================================================
     if any(k in lower for k in ["waec", "neco", "nabteb", "result checker"]):
         for exam_key, exam_details in EXAM_CATALOG.items():
@@ -802,7 +863,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
 
     # =========================================================================
-    # 9. SACHET VOICE MINUTES (TALKMORE)
+    # 10. SACHET VOICE MINUTES (TALKMORE)
     # =========================================================================
     mins_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:mins|min|minutes|minute)", lower)
     is_talkmore_intent = (
@@ -841,7 +902,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
 
     # =========================================================================
-    # 10. DIRECT AIRTIME TOP-UP
+    # 11. DIRECT AIRTIME TOP-UP
     # =========================================================================
     if lower in {"airtime recharge", "airtime", "cmd_airtime"}:
         set_conv_context(sender_phone, pending_action="airtime_prompt")
@@ -870,7 +931,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         return "Enter the amount you want to buy ₦ (e.g 500):"
 
     # =========================================================================
-    # 11. REPEAT LAST ORDER
+    # 12. REPEAT LAST ORDER & BUDGET DATA SEARCH
     # =========================================================================
     if any(k in lower for k in ["repeat", "buy again", "last order"]):
         last_order = (
@@ -900,9 +961,6 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         }
         return stage_pending_order(db, user, plan_info["network"], plan_dict, target_phone, target_label)
 
-    # =========================================================================
-    # 12. BUDGET DATA SEARCH
-    # =========================================================================
     is_balance_budget = any(k in lower for k in ["what can my balance", "can my balance buy"])
     clean_for_budget = re.sub(r"\b(?:\+?234|0)[789][01]\d{8}\b", "", lower)
 
@@ -935,9 +993,12 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
 
     # =========================================================================
-    # 13. HANDLE FOLLOW-UP REPLIES
+    # 13. HANDLE FOLLOW-UP REPLIES (WITH STRICT GUARDRAIL FOR PHONE NUMBERS)
     # =========================================================================
-    if ctx.get("selected_plan") and recipient_phone and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
+    if ctx.get("selected_plan") and not bool(re.search(r"\b\d+(?:\.\d+)?\s*(?:gb|mb)\b", lower)):
+        if not recipient_phone:
+            return "⚠️ Please enter a valid 11-digit phone number (e.g., 08031234567) 📱"
+            
         chosen_plan = ctx["selected_plan"]
         net = chosen_plan.get("network") or detect_network_from_phone(recipient_phone) or ctx.get("network") or "MTN"
         auto_saved_note = ""
@@ -946,6 +1007,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             saved_c = save_user_contact(db, user, pending_name, recipient_phone, net)
             recipient_label = saved_c.display_name
             auto_saved_note = f"✅ *Saved {saved_c.display_name}*\n"
+            
         return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label, extra_prefix_note=auto_saved_note)
 
     candidates: List[Dict[str, Any]] = ctx.get("candidates") or []
@@ -1018,49 +1080,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
 
     # =========================================================================
-    # 15. MAIN GREETING / HOME MENU (DUAL INLINE BUTTON MESSAGES)
-    # =========================================================================
-    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening", "cmd_menu"}:
-        clear_conv_context(sender_phone)
-        first_name = user.name.split()[0]
-        
-        return [
-            {
-                "type": "interactive",
-                "interactive": {
-                    "type": "button",
-                    "body": {
-                        "text": f"Hi {first_name}! 👋\n\nWelcome to Swiftwave - Smart Pay! 🤖\nJust tell me what you need! Meanwhile, join our WhatsApp Channel for update.\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12"
-                    },
-                    "action": {
-                        "buttons": [
-                            {"type": "reply", "reply": {"id": "cmd_buy_data", "title": "Buy Data"}},
-                            {"type": "reply", "reply": {"id": "cmd_airtime", "title": "Airtime"}},
-                            {"type": "reply", "reply": {"id": "cmd_talkmore", "title": "TalkMore"}}
-                        ]
-                    }
-                }
-            },
-            {
-                "type": "interactive",
-                "interactive": {
-                    "type": "button",
-                    "body": {
-                        "text": "More options..."
-                    },
-                    "action": {
-                        "buttons": [
-                            {"type": "reply", "reply": {"id": "cmd_exam_pin", "title": "Exam PIN"}},
-                            {"type": "reply", "reply": {"id": "cmd_mall", "title": "Swiftwave Mall"}},
-                            {"type": "reply", "reply": {"id": "cmd_more_cmds", "title": "Help / Commands"}}
-                        ]
-                    }
-                }
-            }
-        ]
-
-    # =========================================================================
-    # 16. GEMINI AI CONVERSATIONAL FALLBACK
+    # 15. GEMINI AI CONVERSATIONAL FALLBACK
     # =========================================================================
     ai_reply = ask_gemini_assistant(user, contacts, text)
     if ai_reply:
