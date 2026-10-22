@@ -369,7 +369,7 @@ You are Swiftwave Pay. Be extremely minimal and direct. NO LONG PARAGRAPHS. Keep
     return None
 
 
-def process_user_message(db: Session, sender_phone: str, message_text: str, profile_name: str = "Boss") -> Union[str, Dict[str, Any]]:
+def process_user_message(db: Session, sender_phone: str, message_text: str, profile_name: str = "Boss") -> Union[str, Dict[str, Any], List[Dict[str, Any]]]:
     user = get_or_create_user(db, sender_phone, profile_name)
     text = message_text.strip()
     lower = text.lower()
@@ -408,12 +408,12 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         lower = "history"
     elif lower == "repeat last order":
         lower = "repeat"
-    elif lower == "all commands":
+    elif lower in {"all commands", "cmd_more_cmds", "help / commands"}:
         lower = "cmd"
-    elif lower == "swiftwave mall":
+    elif lower in {"swiftwave mall", "cmd_mall"}:
         lower = "mall"
         
-    if lower in {"buy data", "data"}:
+    if lower in {"buy data", "data", "cmd_buy_data"}:
         return {
             "type": "interactive",
             "interactive": {
@@ -435,23 +435,23 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             }
         }
 
-    if lower in {"talkmore voice", "talkmore"}:
+    if lower in {"talkmore voice", "talkmore", "cmd_talkmore"}:
         return {
             "type": "interactive",
             "interactive": {
                 "type": "button",
-                "body": {"text": "📞 Select TalkMore network:"},
+                "body": {"text": "Select a network for TalkMore:"},
                 "action": {
                     "buttons": [
-                        {"type": "reply", "reply": {"id": "tm_mtn", "title": "MTN"}},
-                        {"type": "reply", "reply": {"id": "tm_airtel", "title": "Airtel"}},
-                        {"type": "reply", "reply": {"id": "tm_glo", "title": "GLO"}}
+                        {"type": "reply", "reply": {"id": "tm_airtel", "title": "AIRTEL TalkMore"}},
+                        {"type": "reply", "reply": {"id": "tm_glo", "title": "Glo TalkMore"}},
+                        {"type": "reply", "reply": {"id": "tm_mtn", "title": "MTN TalkMore"}}
                     ]
                 }
             }
         }
 
-    if lower == "exam pin":
+    if lower in {"exam pin", "cmd_exam_pin"}:
         return {
             "type": "interactive",
             "interactive": {
@@ -467,7 +467,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
             }
         }
 
-    if lower in {"airtime recharge", "airtime"}:
+    if lower in {"airtime recharge", "airtime", "cmd_airtime"}:
         return "📱 *Airtime*\nHow much and for which number?\n_Example: Send 500 to Mom_"
 
     # =========================================================================
@@ -949,57 +949,47 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         )
 
     # =========================================================================
-    # 15. MAIN GREETING / HOME MENU 
+    # 15. MAIN GREETING / HOME MENU (DUAL INLINE BUTTON MESSAGES)
     # =========================================================================
     if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening"}:
         clear_conv_context(sender_phone)
         first_name = user.name.split()[0]
         
-        return {
-            "type": "interactive",
-            "interactive": {
-                "type": "list",
-                "header": {
-                    "type": "text",
-                    "text": "⚡ Swiftwave Pay"
-                },
-                "body": {
-                    "text": f"Salam {first_name}! 👋\nJoin Channel: https://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12\n\n💳 Wallet: ₦{user.wallet_balance:,.2f}\n\nTap Menu below or type *cmd*."
-                },
-                "footer": {
-                    "text": "1.5% Cashback on orders!"
-                },
-                "action": {
-                    "button": "Main Menu",
-                    "sections": [
-                        {
-                            "title": "📱 Services",
-                            "rows": [
-                                {"id": "cmd_buy_data", "title": "Buy Data"},
-                                {"id": "cmd_airtime", "title": "Airtime Recharge"},
-                                {"id": "cmd_talkmore", "title": "TalkMore Voice"},
-                                {"id": "cmd_exam_pin", "title": "Exam PIN"}
-                            ]
-                        },
-                        {
-                            "title": "⚙️ Account Tools",
-                            "rows": [
-                                {"id": "cmd_balance", "title": "Wallet Balance"},
-                                {"id": "cmd_repeat", "title": "Repeat Last Order"},
-                                {"id": "cmd_history", "title": "Transaction History"}
-                            ]
-                        },
-                        {
-                            "title": "🌐 Explore",
-                            "rows": [
-                                {"id": "cmd_mall", "title": "Swiftwave Mall"},
-                                {"id": "cmd_help", "title": "All Commands"}
-                            ]
-                        }
-                    ]
+        # We return a List of two interactive messages to bypass the 3-button limit
+        return [
+            {
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {
+                        "text": f"Hi {first_name}! 👋\n\nWelcome to Swiftwave - Smart Pay! 🤖\nJust tell me what you need! Meanwhile, join our WhatsApp Channel for update.\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12"
+                    },
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "cmd_buy_data", "title": "Buy Data"}},
+                            {"type": "reply", "reply": {"id": "cmd_airtime", "title": "Airtime"}},
+                            {"type": "reply", "reply": {"id": "cmd_talkmore", "title": "TalkMore"}}
+                        ]
+                    }
+                }
+            },
+            {
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {
+                        "text": "More options..."
+                    },
+                    "action": {
+                        "buttons": [
+                            {"type": "reply", "reply": {"id": "cmd_exam_pin", "title": "Exam PIN"}},
+                            {"type": "reply", "reply": {"id": "cmd_mall", "title": "Swiftwave Mall"}},
+                            {"type": "reply", "reply": {"id": "cmd_more_cmds", "title": "Help / Commands"}}
+                        ]
+                    }
                 }
             }
-        }
+        ]
 
     # =========================================================================
     # 16. GEMINI AI CONVERSATIONAL FALLBACK
