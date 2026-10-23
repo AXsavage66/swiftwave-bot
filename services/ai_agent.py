@@ -167,6 +167,9 @@ def filter_plans_by_attributes(plans: List[Dict[str, Any]], query_text: str, str
     if len(price_matches) == 1:
         results = price_matches
 
+    if "cheap" in q or "lowest" in q:
+        results.sort(key=lambda x: x["retail"])
+
     return results
 
 
@@ -215,7 +218,10 @@ def save_user_contact(db: Session, user: User, name_clean: str, norm_phone: str,
 
 def get_main_menu(user: User, prefix_text: str = "") -> List[Dict[str, Any]]:
     first_name = user.name.split()[0]
-    welcome_text = f"{prefix_text}Salam {first_name}! 👋\n\nWelcome to Swiftwave - Smart Pay! 🤖\nJust tell me what you need! Meanwhile, join our WhatsApp Channel for updates.\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12"
+    if prefix_text:
+        welcome_text = f"{prefix_text.strip()}\n\nSelect an option below to get started: 👇"
+    else:
+        welcome_text = f"Salam {first_name}! 👋\n\nWelcome to Swiftwave - Smart Pay! 🤖\nJust tell me what you need! Meanwhile, join our WhatsApp Channel for updates.\nhttps://whatsapp.com/channel/0029VbDXBAmLCox8UtDQEb12"
     
     return [
         {
@@ -387,9 +393,9 @@ def ask_gemini_assistant(user: User, contacts: List[SavedContact], user_message:
 
     system_prompt = f"""
 You are Swiftwave Pay, an AI digital VTU assistant. 
-Maintain a polite, professional, and helpful tone grounded in mainstream Islamic values (halal/tayyib).
-If the user asks for pizza, food, or unrelated physical items, politely explain that you only handle digital services (Data, Airtime, TalkMore, Exam PINs).
-If the user asks for a list of services, what you can do, your capabilities, options, or help, strictly reply with EXACTLY this word and nothing else: TRIGGER_MAIN_MENU
+Maintain a polite, professional, and helpful tone grounded in Islamic values (halal/tayyib).
+If the user asks for physical items (pizza, pots, frying pans), non-VTU services, or asks about your capabilities/options, politely explain your specific services (Data, Airtime, TalkMore, Exam PINs) in ONE short sentence, and then append EXACTLY this tag at the very end: TRIGGER_MAIN_MENU
+Example: "I don't sell physical goods, but I can help you top up your digital services! TRIGGER_MAIN_MENU"
 Keep conversational responses under 30 words.
 """
 
@@ -442,7 +448,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     # =========================================================================
     # 0B. GLOBAL ESCAPE ROUTES (Menu & Cancel)
     # =========================================================================
-    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening", "cmd_menu", "🏠 menu", "main menu"} or any(phrase in lower for phrase in ["capabilities", "what do you offer", "options", "what can you do"]):
+    if lower in {"hi", "hello", "hey", "salam", "menu", "start", "help", "good morning", "good afternoon", "good evening", "cmd_menu", "🏠 menu", "main menu"}:
         clear_conv_context(sender_phone)
         return get_main_menu(user)
 
@@ -450,7 +456,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
         db.query(PendingOrder).filter(PendingOrder.user_id == user.id).delete()
         db.commit()
         clear_conv_context(sender_phone)
-        return get_main_menu(user, prefix_text="🚫 Cancelled.\n\n")
+        return get_main_menu(user, prefix_text="🚫 Cancelled.")
 
     # =========================================================================
     # 0C. DEEP NESTED CLICK ROUTING & ALIASES
@@ -602,7 +608,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     if lower == "mall" or any(k in lower for k in ["variety mall", "swiftwave wear", "ecosystem"]):
         return (
             "🛍️ *Swiftwave Variety Mall*\n\n"
-            "Elevate your lifestyle with our curated selection of premium gadgets, everyday essentials, and unique finds. Quality you can trust, delivered with ease.\n\n"
+            "Elevate your lifestyle with our curated selection of smart gadgets, premium accessories, and unique everyday essentials. High-quality items you can trust, delivered with ease. ✨\n\n"
             "👉 https://swiftwave-variety-mall.vercel.app"
         )
 
@@ -766,7 +772,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 "name": f"₦{airtime_amt:,.0f} Airtime", "cost": round(airtime_amt * 0.97, 2), "retail": airtime_amt
             }
             set_conv_context(sender_phone, selected_plan=airtime_plan, pending_action=None)
-            return "Enter the recipient phone number 📱"
+            return f"⚡ Selected: *{airtime_plan['name']}*\n\nEnter the recipient phone number 📱"
         else:
             return {
                 "type": "interactive",
@@ -893,10 +899,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     sender_phone, network=network or "MTN", selected_plan=chosen_tm,
                     candidates=None, pending_save_name=unsaved_contact_name
                 )
-                return f"⚡ {chosen_tm['name']}\nReply with *{unsaved_contact_name}'s 11-digit phone number*."
+                return f"⚡ Selected: *{chosen_tm['name']}*\n\nReply with *{unsaved_contact_name}'s 11-digit phone number*."
             else:
                 set_conv_context(sender_phone, network=network or "MTN", selected_plan=chosen_tm, candidates=None)
-                return "Enter the recipient phone number 📱"
+                return f"⚡ Selected: *{chosen_tm['name']}*\n\nEnter the recipient phone number 📱"
 
         return format_disambiguation_list(
             sender_phone=sender_phone, network=network or "MTN", matching_plans=tm_plans,
@@ -949,10 +955,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                         sender_phone, network=network or "MTN", selected_plan=airtime_plan,
                         candidates=None, pending_save_name=unsaved_contact_name
                     )
-                    return f"📱 Ready to send ₦{airtime_amt:,.0f} Airtime.\nReply with *{unsaved_contact_name}'s 11-digit number*."
+                    return f"⚡ Selected: *{airtime_plan['name']}*\n\nReply with *{unsaved_contact_name}'s 11-digit number*."
                 else:
                     set_conv_context(sender_phone, network=network or "MTN", selected_plan=airtime_plan, candidates=None)
-                    return "Enter the recipient phone number 📱"
+                    return f"⚡ Selected: *{airtime_plan['name']}*\n\nEnter the recipient phone number 📱"
         return "Enter the amount you want to buy ₦ (e.g 500):"
 
     # =========================================================================
@@ -1044,7 +1050,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                 "type": "interactive",
                 "interactive": {
                     "type": "button",
-                    "body": {"text": f"⚠️ *Network Mismatch*\n\nYou entered an *{detected_prefix_net}* number, but you are trying to buy an *{net.upper()}* plan.\n\nPlease enter the correct {net.upper()} number, or click Cancel."},
+                    "body": {"text": f"⚠️ *Network Mismatch*\n\nYou entered an *{detected_prefix_net}* number, but you selected an *{net.upper()}* plan.\n\nPlease enter the correct {net.upper()} number, or click Cancel."},
                     "action": {
                         "buttons": [
                             {"type": "reply", "reply": {"id": "cancel_order", "title": "❌ Cancel"}}
@@ -1074,9 +1080,8 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
                 else:
                     set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
-                    return "Enter the recipient phone number 📱"
+                    return f"⚡ Selected: *{chosen_plan['name']}* (₦{chosen_plan['retail']:,.0f})\n\nEnter the recipient phone number 📱"
                     
-        # Apply strict follow-up context filtering (e.g. searching for '1gb' inside 'weekly' plans)
         narrowed_candidates = filter_plans_by_attributes(candidates, lower, strict=False)
         if narrowed_candidates and len(narrowed_candidates) < len(candidates):
             if len(narrowed_candidates) == 1:
@@ -1086,7 +1091,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
                 else:
                     set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
-                    return "Enter the recipient phone number 📱"
+                    return f"⚡ Selected: *{chosen_plan['name']}* (₦{chosen_plan['retail']:,.0f})\n\nEnter the recipient phone number 📱"
             else:
                 return format_disambiguation_list(sender_phone, network, narrowed_candidates, recipient_phone, recipient_label)
 
@@ -1099,7 +1104,7 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     return stage_pending_order(db, user, net, chosen_plan, recipient_phone, recipient_label)
                 else:
                     set_conv_context(sender_phone, network=net, selected_plan=chosen_plan, candidates=None)
-                    return "Enter the recipient phone number 📱"
+                    return f"⚡ Selected: *{chosen_plan['name']}* (₦{chosen_plan['retail']:,.0f})\n\nEnter the recipient phone number 📱"
             else:
                 return format_disambiguation_list(sender_phone, network, narrowed, recipient_phone, recipient_label)
 
@@ -1124,10 +1129,10 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
                     sender_phone, network=resolved_net, selected_plan=chosen_plan,
                     candidates=None, pending_save_name=unsaved_contact_name
                 )
-                return f"⚡ {chosen_plan['name']}\nReply with *{unsaved_contact_name}'s 11-digit number*."
+                return f"⚡ Selected: *{chosen_plan['name']}* (₦{chosen_plan['retail']:,.0f})\n\nReply with *{unsaved_contact_name}'s 11-digit number*."
             else:
                 set_conv_context(sender_phone, network=resolved_net, selected_plan=chosen_plan, candidates=None)
-                return "Enter the recipient phone number 📱"
+                return f"⚡ Selected: *{chosen_plan['name']}* (₦{chosen_plan['retail']:,.0f})\n\nEnter the recipient phone number 📱"
         elif len(matching_plans) > 1:
             return format_disambiguation_list(
                 sender_phone, network, matching_plans, recipient_phone, recipient_label,
@@ -1139,6 +1144,9 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     
     if network and (is_catalog_request or is_raw_network_click):
         all_net_plans = get_all_catalog_plans(network)
+        if "cheap" in lower or "lowest" in lower:
+            all_net_plans.sort(key=lambda x: x["retail"])
+            
         return format_disambiguation_list(
             sender_phone=sender_phone, network=network, matching_plans=all_net_plans,
             recipient_phone=recipient_phone, recipient_label=recipient_label,
@@ -1151,8 +1159,9 @@ def process_user_message(db: Session, sender_phone: str, message_text: str, prof
     ai_reply = ask_gemini_assistant(user, contacts, text)
     if ai_reply:
         if "TRIGGER_MAIN_MENU" in ai_reply:
+            clean_reply = ai_reply.replace("TRIGGER_MAIN_MENU", "").strip()
             clear_conv_context(sender_phone)
-            return get_main_menu(user)
+            return get_main_menu(user, prefix_text=clean_reply)
         return ai_reply
 
     return "🤖 Try typing: _'Send 2GB MTN to Mom'_ or _'cmd'_."
